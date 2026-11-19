@@ -22,6 +22,7 @@ import {
 	toRelative,
 	writeRecords,
 } from './project.ts'
+import { isPackagePath } from '../../shared/src/packages.ts'
 import { endGlobals, type Piece } from './record.ts'
 import { ENV_RECORD, log, state } from './state.ts'
 
@@ -122,8 +123,17 @@ export default class BlacksmithReporter {
 		// stales every record: a file this run left out keeps none.
 		const always = new Set(alwaysPaths(ctx))
 		const staleAll = pending.changed.some((file) => always.has(file))
+		// The packages in `global` outlive it: with a warm transform cache this
+		// run did not load the transformer's packages, and a later one would.
+		const stored = readJson<Records>(recordsFile(ctx, pending.shard))
 		const merged = mergeRecords(
-			staleAll ? null : readJson<Records>(recordsFile(ctx, pending.shard)),
+			staleAll && stored
+				? {
+						...stored,
+						files: {},
+						global: (stored.global ?? []).filter(isPackagePath),
+					}
+				: stored,
 			run,
 			pending.changed,
 			ctx.options,
@@ -131,6 +141,9 @@ export default class BlacksmithReporter {
 		for (const spec of Object.keys(merged.files)) {
 			if (!existsSync(path.join(ctx.repo, spec))) delete merged.files[spec]
 		}
+		merged.global = merged.global.filter(
+			(file) => !isPackagePath(file) || existsSync(path.join(ctx.repo, file)),
+		)
 		const anchored = await writeRecords(ctx, pending.shard, merged)
 		const entries = Object.values(merged.files)
 		const vouched = entries.filter(
