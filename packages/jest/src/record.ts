@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import {
 	CHILD_RECORD_ENV,
@@ -132,7 +132,7 @@ const childRecorder = path.join(
 
 /** `env` with the child recorder preloaded and `dir` to report to. */
 function childEnvironment(env: NodeJS.ProcessEnv, dir: string): void {
-	const preload = `--import=${JSON.stringify(childRecorder)}`
+	const preload = `--import=${pathToFileURL(childRecorder).href}`
 	if (!env.NODE_OPTIONS?.includes(preload)) {
 		env.NODE_OPTIONS = [env.NODE_OPTIONS, preload].filter(Boolean).join(' ')
 	}

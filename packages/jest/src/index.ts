@@ -30,6 +30,15 @@ const extension = import.meta.url.endsWith('.ts') ? 'ts' : 'js'
 const moduleFile = (name: string): string =>
 	path.join(here, `${name}.${extension}`)
 
+function refuseRuntime(config: JestConfig): JestConfig {
+	if (config.runtime !== undefined) {
+		throw new Error(
+			`@useblacksmith/jest sets \`runtime\` itself and cannot wrap the one the config names (${config.runtime})`,
+		)
+	}
+	return config
+}
+
 function apply(config: JestConfig, options: Options): JestConfig {
 	for (const name of ['runtime', 'testSequencer'] as const) {
 		if (config[name] !== undefined) {
@@ -65,7 +74,7 @@ function apply(config: JestConfig, options: Options): JestConfig {
 			? {
 					projects: config.projects.map((project) =>
 						typeof project === 'object' && project !== null
-							? { ...project, runtime }
+							? { ...refuseRuntime(project as JestConfig), runtime }
 							: project,
 					),
 				}
