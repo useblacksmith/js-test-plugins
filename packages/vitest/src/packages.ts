@@ -176,7 +176,13 @@ export async function updatePackages(
 		} catch {}
 		await rm(file, { force: true })
 	}
-	for (const [test, dirs] of fresh) records.files[test] = [...dirs].sort()
+	// A run narrowed by `--project` saw a shared test file in some of its
+	// projects only: what the others loaded stays.
+	const narrowed = vitest.config.project.length > 0
+	for (const [test, dirs] of fresh) {
+		if (narrowed) for (const dir of records.files[test] ?? []) dirs.add(dir)
+		records.files[test] = [...dirs].sort()
+	}
 	for (const test of Object.keys(records.files)) {
 		if (!existsSync(path.join(repo, test))) delete records.files[test]
 	}
