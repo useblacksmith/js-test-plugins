@@ -91,6 +91,19 @@ for (const [mode, args] of [
 			assert.deepEqual(Repo.ran(repo.jest(...args)), ALL)
 		})
 
+		test('a run of some test files keeps the transformer configs the others looked up', () => {
+			repo.append('src/c.js', '// edit\n')
+			assert.deepEqual(Repo.ran(repo.jest(...args)), ['c'])
+			assert.ok(
+				repo.records().global.includes('db/.babelrc.json') ||
+					repo.records().global.includes('test/.babelrc.json'),
+			)
+			const before = repo.records().global.length
+			repo.append('src/child-data.txt', '\n')
+			assert.deepEqual(Repo.ran(repo.jest(...args)), ['child'])
+			assert.equal(repo.records().global.length, before)
+		})
+
 		test('a transformer config that was looked for and not found reruns everything once it exists', () => {
 			repo.write('src/.babelrc.json', '{}')
 			assert.deepEqual(Repo.ran(repo.jest(...args)), ALL)

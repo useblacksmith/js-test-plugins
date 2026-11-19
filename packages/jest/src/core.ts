@@ -136,7 +136,15 @@ export function mergeRecords(
 			delete out.files[spec]
 		}
 	}
-	if (Object.keys(run.files).length > 0) out.global = [...run.global].sort()
+	// A run of every recorded test file saw everything `global` can hold; a
+	// run of some of them did not load what only the others make a transformer
+	// look up, so what the record already names stays.
+	const complete = Object.keys(out.files).every((spec) => spec in run.files)
+	if (Object.keys(run.files).length > 0) {
+		out.global = complete
+			? [...run.global].sort()
+			: union(out.global, run.global)
+	}
 	for (const [spec, entry] of Object.entries(run.files)) {
 		const previous = out.files[spec]
 		if (!run.partial) out.files[spec] = entry
