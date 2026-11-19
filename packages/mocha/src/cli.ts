@@ -42,13 +42,13 @@ import { ENV_IN_CLI, ENV_RUN, dataDir, suffix, type Shard } from './paths.ts'
 /**
  * blacksmith-mocha affected [--shard i/n] [--json] -- <mocha args>
  *   Prints which spec files, and which of their tests, the change affects.
- * blacksmith-mocha run [--shard i/n] [--shadow] [--no-commit] -- <mocha args>
+ * blacksmith-mocha run [--shard i/n] [--no-commit] -- <mocha args>
  *   Runs Mocha on the affected spec files and merges what it recorded.
  * blacksmith-mocha commit [run.json ...]
  *   Merges recorded runs (the shards of one CI run) into the record.
  */
 const USAGE = `usage:
-  blacksmith-mocha run [--shard <i>/<n>] [--shadow] [--no-commit] -- <mocha arguments>
+  blacksmith-mocha run [--shard <i>/<n>] [--no-commit] -- <mocha arguments>
   blacksmith-mocha affected [--shard <i>/<n>] [--json] -- <mocha arguments>
   blacksmith-mocha commit [<run.json> ...]`
 
@@ -398,11 +398,9 @@ async function main(): Promise<number> {
 		return 0
 	}
 	describe(pending)
-	// Shadow mode runs every spec the shard owns and only reports the selection.
-	const shadow = own.includes('--shadow')
 	const owned = new Set(pending.owned)
 	const skip = pending.all.filter(
-		(spec) => !owned.has(spec) || (!shadow && !pending.selection[spec]?.run),
+		(spec) => !owned.has(spec) || !pending.selection[spec]?.run,
 	)
 	let status = 0
 	// Mocha exits 1 with "No test files found" when every spec is ignored.

@@ -73,13 +73,6 @@ describe('selection', () => {
 		assert.deepEqual(run(), ['e'])
 		assert.deepEqual(affected(), [])
 	})
-
-	test('shadow mode runs every spec file and reports what would have run', () => {
-		repo.append('src/b.js', '// edit\n')
-		const result = repo.cli('run', '--shadow', '--', GLOB)
-		assert.deepEqual(Repo.ran(result), ['b'])
-		assert.match(result.output, /18 passing/)
-	})
 })
 
 describe('files run in part with --grep', () => {

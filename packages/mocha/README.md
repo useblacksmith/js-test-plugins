@@ -5,8 +5,7 @@ records what each spec file depends on; on later runs it skips the spec files
 whose dependencies have not changed. On Blacksmith runners the record is kept
 in the Actions cache between jobs, so no extra workflow steps are needed.
 
-> Experimental. Start with `--shadow`, which runs everything and only reports
-> what would have been selected.
+> Experimental.
 
 ## Usage
 
@@ -18,7 +17,6 @@ Put `blacksmith-mocha run --` in front of your Mocha arguments:
 
 ```sh
 npx blacksmith-mocha run -- 'test/**/*.test.js'
-npx blacksmith-mocha run --shadow -- 'test/**/*.test.js'
 ```
 
 Or keep the plain `mocha` command and select from `.mocharc.cjs`:
@@ -55,7 +53,7 @@ workflow file run everything.
 
 | Command | |
 | --- | --- |
-| `blacksmith-mocha run [--shard <i>/<n>] [--shadow] [--no-commit] -- <mocha arguments>` | Runs Mocha on the affected spec files and updates the record. |
+| `blacksmith-mocha run [--shard <i>/<n>] [--no-commit] -- <mocha arguments>` | Runs Mocha on the affected spec files and updates the record. |
 | `blacksmith-mocha affected [--shard <i>/<n>] [--json] -- <mocha arguments>` | Prints the affected spec files and, per file, the tests that need to run. |
 | `blacksmith-mocha commit [<run.json> ...]` | Merges recorded runs into the record. |
 
