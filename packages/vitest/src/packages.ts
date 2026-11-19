@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -57,8 +57,26 @@ function findPackage(from: string, name: string): string | null {
 const SPECIFIER =
 	/(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)['"]([^'"\s]+)['"]/g
 
-/** The packages the source file `file` names in its imports. */
-function importedPackages(file: string): string[] {
+const EXTENSIONS = ['', '.ts', '.mts', '.cts', '.js', '.mjs', '.cjs', '.tsx', '.jsx']
+
+/** The file a relative import in `from` names, with the extension or index file it leaves out. */
+function localFile(from: string, specifier: string): string | null {
+	const base = path.resolve(path.dirname(from), specifier)
+	const stems = [base, base.replace(/\.[cm]?js$/, ''), path.join(base, 'index')]
+	for (const stem of stems) {
+		for (const extension of EXTENSIONS) {
+			try {
+				if (statSync(stem + extension).isFile()) return stem + extension
+			} catch {}
+		}
+	}
+	return null
+}
+
+/** The packages the source file `file` names in its imports, and those the files of the repository it imports name. */
+function importedPackages(file: string, seen = new Set<string>()): string[] {
+	if (seen.has(file)) return []
+	seen.add(file)
 	let source: string
 	try {
 		source = readFileSync(file, 'utf8')
@@ -67,6 +85,13 @@ function importedPackages(file: string): string[] {
 	}
 	const found: string[] = []
 	for (const [, specifier] of source.matchAll(SPECIFIER)) {
+		if (specifier?.startsWith('.')) {
+			const local = localFile(file, specifier)
+			if (local && packageDir(local) === null) {
+				found.push(...importedPackages(local, seen))
+			}
+			continue
+		}
 		if (!specifier || /^[./]|^[a-z]+:/i.test(specifier)) continue
 		const parts = specifier.split('/')
 		const name = specifier.startsWith('@')
