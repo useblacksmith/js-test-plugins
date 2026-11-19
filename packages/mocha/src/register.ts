@@ -1,4 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import {
+	isPackagePath,
+	repositoryPackage,
+} from '../../shared/src/packages.ts'
 import Module, { createRequire, syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
@@ -283,6 +287,19 @@ function install(): void {
 
 	// ---- imports ----------------------------------------------------------
 	function noteLoad(from: string | undefined, to: string): void {
+		// An installed package stands for its files: whoever loads one of them
+		// depends on the package, and the package on the packages it loads.
+		if (isPackagePath(to)) {
+			const dir = repositoryPackage(repo, to)
+			const parent =
+				from === undefined
+					? loadStack.at(-1)
+					: isPackagePath(from)
+						? repositoryPackage(repo, from)
+						: from
+			if (dir !== null && parent && parent !== dir) addEdge(parent, dir)
+			return
+		}
 		if (ignored(to)) return
 		// A CommonJS module imported from ESM reaches `Module._load` with no
 		// parent; the resolve hook already saw its importer.
