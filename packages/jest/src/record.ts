@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto'
+import { repositoryPackage } from '../../shared/src/packages.ts'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import {
 	CHILD_RECORD_ENV,
+	ENV_REPO,
 	Outputs,
 	isIgnored,
 	wrapFs,
@@ -68,7 +70,15 @@ const root = (): string | undefined => process.env[ENV_RECORD]
 
 function reportGlobal(file: string): void {
 	const dir = root()
-	if (!dir || isIgnored(file) || globals.has(file)) return
+	if (!dir) return
+	// A package stands for its files: a change of its version reruns everything.
+	if (isIgnored(file)) {
+		const repo = process.env[ENV_REPO]
+		const installed = repo ? repositoryPackage(repo, file) : null
+		if (installed === null) return
+		file = installed
+	}
+	if (globals.has(file)) return
 	globals.add(file)
 	try {
 		raw.appendFileSync(
@@ -178,9 +188,16 @@ export function end(modules: Iterable<string>): void {
 	const done = current
 	current = null
 	if (!dir || !done) return
+	const repo = process.env[ENV_REPO]
 	for (const file of modules) {
 		if (!isIgnored(file)) done.deps.add(file)
+		else {
+			const installed = repo ? repositoryPackage(repo, file) : null
+			if (installed !== null) done.deps.add(installed)
+		}
 	}
+	// What this process loaded outside Jest's registry: Jest and the transformers.
+	for (const file of Object.keys(require.cache)) reportGlobal(file)
 	try {
 		for (const name of raw.readdirSync(done.childDir)) {
 			const text = raw.readFileSync(path.join(done.childDir, name), 'utf8')

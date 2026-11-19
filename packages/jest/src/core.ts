@@ -5,12 +5,12 @@ import picomatch from 'picomatch'
  * file a module registry of its own, so the record is one dependency list per
  * test file, with the state of each of its tests beside it.
  */
-export const RECORDS_VERSION = 1
+export const RECORDS_VERSION = 2
 
 export type TestState = 'passed' | 'failed' | 'skipped'
 
 export interface FileRecord {
-	/** Modules the test file loaded and files it read, itself aside. */
+	/** Modules the test file loaded and files it read, itself aside, and the directories of the installed packages it loaded. */
 	deps: string[]
 	/** Full name of every test in the file → how it ended the last time it ran. */
 	tests: Record<string, TestState>
