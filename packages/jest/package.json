@@ -1,0 +1,43 @@
+{
+	"name": "@useblacksmith/jest",
+	"version": "0.1.0",
+	"description": "Runs only the Jest test files affected since the last run, with Blacksmith-backed caching",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/useblacksmith/js-test-plugins.git",
+		"directory": "packages/jest"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/jest/src/index.d.ts",
+			"default": "./dist/jest/src/index.js"
+		},
+		"./runtime": "./dist/jest/src/runtime.js"
+	},
+	"files": [
+		"dist"
+	],
+	"engines": {
+		"node": ">=22.15.0"
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"prepack": "npm run build",
+		"check:types": "tsc --noEmit",
+		"test": "node --test --test-concurrency=1 test/*.test.ts"
+	},
+	"peerDependencies": {
+		"jest": ">=29.0.0"
+	},
+	"dependencies": {
+		"picomatch": "4.0.7"
+	},
+	"devDependencies": {
+		"@types/node": "^26.6.6",
+		"@types/picomatch": "^4.0.3",
+		"jest": "^30.0.0",
+		"typescript": "^7.0.2"
+	}
+}

@@ -11,6 +11,7 @@ on:
     tags:
       - "vitest-v*"
       - "mocha-v*"
+      - "jest-v*"
 
 permissions:
   contents: read
