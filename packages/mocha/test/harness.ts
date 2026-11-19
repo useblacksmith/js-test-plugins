@@ -26,6 +26,8 @@ export const mocharc = path.join(packageRoot, 'src', 'mocharc.cts')
 
 export interface Result {
 	status: number
+	stdout: string
+	/** stdout and stderr. */
 	output: string
 	/** The `[blacksmith]` and `  run  ` lines. */
 	lines: string[]
@@ -73,15 +75,31 @@ export class Repo {
 		return readFileSync(path.join(this.cwd, file), 'utf8')
 	}
 
+	/** The environment of a run: this process's without what a CI job adds, so a fixture never reaches the job's real cache. */
+	environment(): NodeJS.ProcessEnv {
+		const env: NodeJS.ProcessEnv = { ...process.env }
+		for (const name of [
+			'ACTIONS_RESULTS_URL',
+			'ACTIONS_CACHE_MODE',
+			'GITHUB_WORKFLOW_REF',
+			'GITHUB_REPOSITORY',
+			'GITHUB_JOB',
+		]) {
+			delete env[name]
+		}
+		return { ...env, ...this.env }
+	}
+
 	private spawn(args: string[]): Result {
 		const result = spawnSync(process.execPath, args, {
 			cwd: this.cwd,
 			encoding: 'utf8',
-			env: { ...process.env, ...this.env },
+			env: this.environment(),
 		})
 		const output = `${result.stdout}${result.stderr}`
 		return {
 			status: result.status ?? 1,
+			stdout: result.stdout,
 			output,
 			lines: output
 				.split('\n')

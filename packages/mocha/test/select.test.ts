@@ -136,7 +136,7 @@ describe('shards', () => {
 	const owned = (index: number) =>
 		(
 			JSON.parse(
-				repo.cli('affected', '--shard', `${index}/3`, '--json', '--', GLOB).output,
+				repo.cli('affected', '--shard', `${index}/3`, '--json', '--', GLOB).stdout,
 			) as { owned: string[] }
 		).owned
 
@@ -348,7 +348,7 @@ describe('Actions cache', () => {
 		const child = spawn(
 			process.execPath,
 			[path.join(import.meta.dirname, '..', 'src', 'cli.ts'), ...args],
-			{ cwd: repo.cwd, env: { ...process.env, ...repo.env } },
+			{ cwd: repo.cwd, env: repo.environment() },
 		)
 		let output = ''
 		child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString()))
@@ -370,6 +370,25 @@ describe('Actions cache', () => {
 		assert.match(second, /restored dependency cache blacksmith-mocha-/)
 		assert.match(second, /1 of 6 spec file\(s\) affected; changed: src\/b\.js/)
 		assert.equal(cache.keys().length, 2)
+	})
+
+	test('affected --json prints the JSON alone on stdout when it restores', async () => {
+		repo.git('clean', '-qfdx', '-e', 'node_modules/mocha')
+		const child = spawn(
+			process.execPath,
+			[path.join(import.meta.dirname, '..', 'src', 'cli.ts'), 'affected', '--json', '--', GLOB],
+			{ cwd: repo.cwd, env: repo.environment(), stdio: ['ignore', 'pipe', 'pipe'] },
+		)
+		let stdout = ''
+		let stderr = ''
+		child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()))
+		child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()))
+		await once(child, 'exit')
+		assert.match(stderr, /restored dependency cache/)
+		assert.deepEqual(
+			(JSON.parse(stdout) as { owned: string[] }).owned.length,
+			6,
+		)
 	})
 
 	test('a job whose cache is read-only restores and does not save', async () => {

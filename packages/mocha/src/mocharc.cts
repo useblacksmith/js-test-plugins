@@ -37,10 +37,7 @@ function blacksmith(user: MochaConfig = {}): MochaConfig {
 				...process.argv.slice(2),
 			],
 			{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] },
-		)
-			.trim()
-			.split('\n')
-			.pop() ?? '{}',
+		),
 	) as {
 		all: string[]
 		owned: string[]

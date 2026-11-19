@@ -100,8 +100,13 @@ interface Context {
 const here = path.dirname(fileURLToPath(import.meta.url))
 const source = import.meta.url.endsWith('.ts')
 
+/** With `--json`, stdout carries the JSON alone. */
+let logToStderr = false
+
 function log(message: string): void {
-	console.log(`[blacksmith] ${message}`)
+	const line = `[blacksmith] ${message}`
+	if (logToStderr) console.error(line)
+	else console.log(line)
 }
 
 function readJson<T>(file: string): T | null {
@@ -381,6 +386,7 @@ async function main(): Promise<number> {
 	const mochaArgs = split === -1 ? [] : rest.slice(split + 1)
 	const shardAt = own.indexOf('--shard')
 	const shard = shardAt === -1 ? null : parseShard(own[shardAt + 1])
+	logToStderr = command === 'affected' && own.includes('--json')
 	const pending = await affected(ctx, shard, mochaArgs)
 	if (command === 'affected') {
 		if (own.includes('--json')) console.log(JSON.stringify(pending))
