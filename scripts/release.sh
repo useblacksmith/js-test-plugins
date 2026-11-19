@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
-# Cuts a release from main: bumps package.json and package-lock.json, pushes
-# that commit, then pushes the v<version> tag that release.yml publishes.
+# Cuts a release of one package from main: bumps its package.json, pushes
+# that commit, then pushes the <package>-v<version> tag that release.yml publishes.
 set -euo pipefail
 
-bump=${1:-}
+package=${1:-}
+bump=${2:-}
+case "$package" in
+	vitest | mocha) ;;
+	*) package= ;;
+esac
 case "$bump" in
 	major | minor | patch) ;;
-	*)
-		echo "usage: npm run release -- <major|minor|patch>" >&2
-		exit 2
-		;;
+	*) bump= ;;
 esac
+if [ -z "$package" ] || [ -z "$bump" ]; then
+	echo "usage: pnpm run release <vitest|mocha> <major|minor|patch>" >&2
+	exit 2
+fi
 
 cd "$(git rev-parse --show-toplevel)"
+manifest="packages/$package/package.json"
 
 branch=$(git rev-parse --abbrev-ref HEAD)
 if [ "$branch" != main ]; then
@@ -20,8 +27,8 @@ if [ "$branch" != main ]; then
 	exit 1
 fi
 
-if [ -n "$(git status --porcelain -- package.json package-lock.json)" ]; then
-	echo "package.json or package-lock.json has uncommitted changes" >&2
+if [ -n "$(git status --porcelain -- "$manifest")" ]; then
+	echo "$manifest has uncommitted changes" >&2
 	exit 1
 fi
 
@@ -31,7 +38,11 @@ if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
 	exit 1
 fi
 
-tag=$(npm version "$bump" -m 'release: v%s')
+# The workspace lockfile does not record a workspace package's own version.
+version=$(cd "packages/$package" && npm version "$bump" --no-git-tag-version)
+tag="$package-$version"
+git commit --quiet -m "release: $tag" -- "$manifest"
+git tag "$tag"
 git push origin main
 git push origin "$tag"
 echo "pushed $tag; release.yml stages it on npm"

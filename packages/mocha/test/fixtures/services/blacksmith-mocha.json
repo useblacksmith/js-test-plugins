@@ -1,0 +1,9 @@
+{
+	"services": {
+		"localhost:5432": ["db/migrations/**"],
+		"localhost:4010": ["mocks/**"]
+	},
+	"dependencies": {
+		"test/legacy.test.js": ["docker/**"]
+	}
+}

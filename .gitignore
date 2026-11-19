@@ -1,4 +1,4 @@
 node_modules/
-test/fixture-runs-*/
+packages/vitest/test/fixture-runs-*/
 dist/
 out/

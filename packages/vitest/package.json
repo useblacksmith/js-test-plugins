@@ -1,0 +1,43 @@
+{
+	"name": "@useblacksmith/vitest",
+	"version": "0.6.5",
+	"description": "Runs only the Vitest tests affected since the last successful run, with Blacksmith-backed caching",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/useblacksmith/js-test-plugins.git",
+		"directory": "packages/vitest"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/vitest/src/index.d.ts",
+			"default": "./dist/vitest/src/index.js"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"prepack": "npm run build",
+		"check:types": "tsc --noEmit",
+		"test": "vitest run"
+	},
+	"peerDependencies": {
+		"vitest": "^4.1.1 || >=5.1.0"
+	},
+	"devDependencies": {
+		"@types/node": "^26.6.6",
+		"@types/picomatch": "^4.0.3",
+		"@vitest/browser-playwright": "^5.1.0",
+		"@vitest/coverage-v8": "^5.1.0",
+		"playwright": "^1.65.0",
+		"typescript": "^7.0.2",
+		"vite": "^8.3.5",
+		"vitest": "^5.1.0"
+	},
+	"dependencies": {
+		"picomatch": "4.0.7"
+	}
+}

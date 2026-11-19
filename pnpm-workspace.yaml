@@ -1,0 +1,6 @@
+packages:
+  - packages/*
+
+# Install only versions published at least 3 days ago: the window for
+# supply-chain compromises to be caught. A frozen-lockfile install is unaffected.
+minimumReleaseAge: 4320

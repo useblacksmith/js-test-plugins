@@ -1,0 +1,12 @@
+{
+ "test/a.test.js": ["src/a.js", "src/shared.js"],
+ "test/b.test.js": ["src/b.js", "src/shared.js"],
+ "test/c.test.js": ["src/helper.js", "src/lazy.js", "src/lazy-dep.js"],
+ "test/d.test.js": ["src/helper.js", "src/lazy.js", "src/lazy-dep.js"],
+ "test/e.test.js": ["src/esm/x.mjs", "src/esm/shared.mjs"],
+ "test/x.test.mjs": ["src/esm/x.mjs", "src/esm/shared.mjs"],
+ "test/y.test.mjs": ["src/esm/y.mjs", "src/esm/shared.mjs"],
+ "test/z.test.mjs": ["src/esm/dyn.mjs", "src/esm/dyn-dep.mjs"],
+ "test/w.test.mjs": ["src/esm/dyn.mjs", "src/esm/dyn-dep.mjs"],
+ "test/v.test.mjs": ["src/esm/uses-cjs.mjs", "src/a.js", "src/shared.js"]
+}

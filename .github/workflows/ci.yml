@@ -16,13 +16,6 @@ concurrency:
 jobs:
   check:
     runs-on: blacksmith-2vcpu-ubuntu-2404
-    strategy:
-      fail-fast: false
-      matrix:
-        # '' is the locked version; 4.1 keeps no dependency record, so the
-        # plugin's own is what runs there.
-        vitest: ['', '4.1.1', '4.1']
-    name: check (vitest ${{ matrix.vitest || 'locked' }})
     steps:
       - uses: actions/checkout@v6
         with:
@@ -30,14 +23,9 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - run: npm ci
-      - if: matrix.vitest != ''
-        run: npm install --no-save "vitest@$VERSION" "@vitest/browser-playwright@$VERSION" "@vitest/coverage-v8@$VERSION"
-        env:
-          VERSION: ${{ matrix.vitest }}
-      - run: npx playwright install --with-deps chromium
-      - run: npm run check:types
-      - run: npm run build
-      - run: npm test
+      - run: corepack enable   # pnpm, at the version package.json pins
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @useblacksmith/vitest exec playwright install --with-deps chromium
+      - run: pnpm run check:types
+      - run: pnpm run build
+      - run: pnpm test
