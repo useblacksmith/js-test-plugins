@@ -165,6 +165,11 @@ function install(): void {
 	const graph = new Map<string, Set<string>>()
 	const entries = new Set<string>()
 	const unattributed = new Set<string>()
+	// What loaded before the recorder: Mocha, and what its config required.
+	for (const file of Object.keys(require.cache)) {
+		const dir = repositoryPackage(repo, file)
+		if (dir !== null) unattributed.add(rel(dir))
+	}
 	/** Every repository file loaded as a module; Node's loaders read their source through the wrapped fs. */
 	const modules = new Set<string>()
 	const files = new Map<string, FileEntry>()
