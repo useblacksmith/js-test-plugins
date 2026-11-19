@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
 /**
@@ -32,13 +32,36 @@ export function repositoryPackage(repo: string, file: string): string | null {
 	return relative.startsWith('..') || path.isAbsolute(relative) ? null : dir
 }
 
+/**
+ * The copies of the package at `dir` in its pnpm store, when it is in one.
+ * `pnpm add` leaves the old copy where it was and links a new one beside it,
+ * so the copy a test loaded stays as it is while the name now leads elsewhere.
+ */
+function storeCopies(dir: string): string {
+	const parts = dir.split(path.sep)
+	const at = parts.lastIndexOf('.pnpm')
+	if (at === -1 || parts[at + 2] !== 'node_modules') return ''
+	const prefix = `${parts
+		.slice(at + 3)
+		.join('+')
+		.toLowerCase()}@`
+	try {
+		const copies = readdirSync(parts.slice(0, at + 1).join(path.sep))
+			.filter((entry) => entry.toLowerCase().startsWith(prefix))
+			.sort()
+		return `:${copies.join(',')}`
+	} catch {
+		return ''
+	}
+}
+
 /** What stands in the anchor for the package installed at `dir`; null when none is. */
 export function packageVersion(dir: string): string | null {
 	try {
 		const manifest = JSON.parse(
 			readFileSync(path.join(dir, 'package.json'), 'utf8'),
 		) as { version?: unknown }
-		return `package:${String(manifest.version)}`
+		return `package:${String(manifest.version)}${storeCopies(dir)}`
 	} catch {
 		return null
 	}

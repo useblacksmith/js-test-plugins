@@ -78,6 +78,8 @@ The second argument of `withBlacksmith`:
   changed in place at the same version (`patch-package`, a git or `file:`
   dependency), a package installed outside the repository, and a newly
   installed copy that shadows the one a test loaded before.
+  In a pnpm store a copy counts as changed when another copy of the same
+  package is added or removed, because `pnpm add` leaves the old one in place.
 - What a test reaches over the network (a database, a mock server) is not
   recorded; map it with `dependencies`.
 - A file that a module of Jest's own process (a custom transformer, a custom
