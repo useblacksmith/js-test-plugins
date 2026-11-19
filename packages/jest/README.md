@@ -45,7 +45,14 @@ and `--shard` are supported. Requires Node 22.15 or newer and Jest 29 or newer.
   test file moves no other file to another shard. Each shard keeps a record of
   its own.
 
-Changes to a lockfile, `package.json`, `tsconfig.json`, `jest.config.*`,
+- **Installed packages.** The record names the packages a test file loaded,
+  transitive ones included, each with the version in its `package.json`. After
+  an install, a test file reruns when one of its packages has another version
+  or is gone. Lockfiles are not compared, and a `package.json` change that only
+  touches its dependency fields reruns nothing by itself. A new version of a
+  package Jest's own process or a transformer loaded runs everything.
+
+Changes to anything else in `package.json`, to `tsconfig.json`, `jest.config.*`,
 `babel.config.*`, `.babelrc`, `.swcrc`, the workflow file, or anything the
 config file imports or `globalSetup` loads or reads run everything. So does a run with coverage, and watch
 mode is left to Jest.
@@ -67,6 +74,10 @@ The second argument of `withBlacksmith`:
 - In `projects`, inline project objects are wrapped. A project given as a path
   needs `runtime: require.resolve('@useblacksmith/jest/runtime')` in its own
   config.
+- A package is known by its directory and version. Not seen: a package
+  changed in place at the same version (`patch-package`, a git or `file:`
+  dependency), a package installed outside the repository, and a newly
+  installed copy that shadows the one a test loaded before.
 - What a test reaches over the network (a database, a mock server) is not
   recorded; map it with `dependencies`.
 - A file that a module of Jest's own process (a custom transformer, a custom
