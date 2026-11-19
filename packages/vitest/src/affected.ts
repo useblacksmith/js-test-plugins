@@ -745,10 +745,8 @@ export class TreeSnapshotProvider {
 				changedPackages.add(relative)
 				continue
 			}
-			if (LOCKFILES.has(path.basename(relative))) {
-				lockfile = true
-				continue
-			}
+			// Still a changed file below: a test that read the lockfile itself reruns.
+			if (LOCKFILES.has(path.basename(relative))) lockfile = true
 			if (isManifest(relative)) manifestDirs.push(repoDir(relative))
 			changed.add(path.join(repo, relative))
 		}
