@@ -6,7 +6,7 @@ set -euo pipefail
 package=${1:-}
 bump=${2:-}
 case "$package" in
-	vitest | mocha) ;;
+	vitest | mocha | jest) ;;
 	*) package= ;;
 esac
 case "$bump" in
@@ -14,7 +14,7 @@ case "$bump" in
 	*) bump= ;;
 esac
 if [ -z "$package" ] || [ -z "$bump" ]; then
-	echo "usage: pnpm run release <vitest|mocha> <major|minor|patch>" >&2
+	echo "usage: pnpm run release <vitest|mocha|jest> <major|minor|patch>" >&2
 	exit 2
 fi
 

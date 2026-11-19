@@ -9,10 +9,11 @@ Actions cache between jobs.
 | --- | --- |
 | [`@useblacksmith/vitest`](packages/vitest) | Vitest |
 | [`@useblacksmith/mocha`](packages/mocha) | Mocha |
+| [`@useblacksmith/jest`](packages/jest) | Jest |
 
 ## Development
 
-A pnpm workspace. `packages/shared` holds the code both plugins use (file-read
+A pnpm workspace. `packages/shared` holds the code the plugins share (file-read
 recording, the git anchor, the cache client); it is not published, each
 plugin compiles it into its own `dist/`.
 
@@ -24,4 +25,4 @@ pnpm run build
 pnpm test
 ```
 
-Releases are cut per package: `pnpm run release <vitest|mocha> <major|minor|patch>`.
+Releases are cut per package: `pnpm run release <vitest|mocha|jest> <major|minor|patch>`.
