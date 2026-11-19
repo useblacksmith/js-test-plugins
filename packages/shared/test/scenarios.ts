@@ -136,7 +136,7 @@ function packageScenarios(): Scenario[] {
 				)
 				project.change('test/spawn.test.js', project.spawningTest('spawn', UNUSED))
 				const run = await project.run()
-				assert.deepEqual(run.ran, [...ALL, 'asset', 'spawn'], run.output)
+				assert.deepEqual(run.ran, [...ALL, 'asset', 'spawn'].sort(), run.output)
 				bump(project, USED)
 				await expectRun(project, ['asset'])
 				bump(project, UNUSED)
