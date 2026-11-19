@@ -99,6 +99,8 @@ function install(): void {
 			if (!isIgnored(absolute)) current.outputs.writes(absolute)
 		},
 	)
+	// Named imports of `node:fs` made before or after this see the wrappers too.
+	nodeModule.syncBuiltinESMExports()
 	const load = nodeModule._load
 	nodeModule._load = function (request, parent, isMain) {
 		try {
