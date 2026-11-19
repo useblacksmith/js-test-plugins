@@ -48,4 +48,20 @@ pnpm pack --pack-destination /tmp/tarball
 BLACKSMITH_E2E_TARBALL=/tmp/tarball/useblacksmith-jest-0.1.0.tgz pnpm run test:e2e
 ```
 
-Releases are cut per package: `pnpm run release <vitest|mocha|jest> <major|minor|patch>`.
+### Releases
+
+Releases are cut per package from `main` with `pnpm run release <vitest|mocha|jest> <action>`.
+The script sets the version, pushes the commit and the `<package>-v<version>`
+tag, and the Release workflow stages that version on npm.
+
+| Current version | Command | New version | npm dist-tag |
+| --- | --- | --- | --- |
+| `1.2.3` | `patch`, `minor` or `major` | `1.2.4`, `1.3.0` or `2.0.0` | `latest` |
+| `1.2.3` | `patch`, `minor` or `major` with `--rc` | `1.2.4-rc1`, `1.3.0-rc1` or `2.0.0-rc1` | `rc` |
+| `1.3.0-rc1` | `rc` | `1.3.0-rc2` | `rc` |
+| `1.3.0-rc1` | `promote` | `1.3.0` | `latest` |
+
+A release candidate is not what `npm install @useblacksmith/<package>` or a
+version range resolves; install one with `@useblacksmith/<package>@rc` or its
+exact version. From a release candidate, `patch`, `minor` and `major` are
+refused; from a production version, `rc` and `promote` are.
