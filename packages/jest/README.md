@@ -46,8 +46,8 @@ and `--shard` are supported. Requires Node 22.15 or newer and Jest 29 or newer.
   its own.
 
 Changes to a lockfile, `package.json`, `tsconfig.json`, `jest.config.*`,
-`babel.config.*`, `.babelrc`, `.swcrc`, the workflow file, or anything
-`globalSetup` loads run everything. So does a run with coverage, and watch
+`babel.config.*`, `.babelrc`, `.swcrc`, the workflow file, or anything the
+config file imports or `globalSetup` loads or reads run everything. So does a run with coverage, and watch
 mode is left to Jest.
 
 ## Options
@@ -69,8 +69,9 @@ The second argument of `withBlacksmith`:
   config.
 - What a test reaches over the network (a database, a mock server) is not
   recorded; map it with `dependencies`.
-- A file that a transformer or another module of Jest's own process reads once
-  and keeps is recorded for the first test file of that process only, unless
-  it is one of the config files listed above.
+- A file that a module of Jest's own process (a custom transformer, a custom
+  environment) reads once and keeps is recorded for the first test file of
+  that process only. Babel, SWC and TypeScript config files are exempt: a
+  change to one, in any directory, runs everything.
 - A child process started with an `env` that drops `NODE_OPTIONS` is not
   recorded.
