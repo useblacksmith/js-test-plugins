@@ -120,7 +120,10 @@ export function globalPackages(vitest: Vitest, repo: string): string[] {
 		for (const file of project.config.globalSetup) sources.add(file)
 	}
 	for (const file of sources) {
-		if (packageDir(file) === null) queue.push(...importedPackages(file))
+		// A config or globalSetup file that is itself part of an installed package.
+		const installed = packageDir(file)
+		if (installed === null) queue.push(...importedPackages(file))
+		else queue.push(installed)
 	}
 	const seen = new Set<string>()
 	const found = new Set<string>()
@@ -211,7 +214,14 @@ export async function updatePackages(
 	for (const test of Object.keys(records.files)) {
 		if (!existsSync(path.join(repo, test))) delete records.files[test]
 	}
-	records.global = globalPackages(vitest, repo)
+	// The other projects' config and globalSetup files were not loaded by a narrowed run.
+	const global = new Set(globalPackages(vitest, repo))
+	if (narrowed) {
+		for (const dir of records.global) {
+			if (existsSync(path.join(repo, dir))) global.add(dir)
+		}
+	}
+	records.global = [...global].sort()
 	await mkdir(dir, { recursive: true })
 	const file = path.join(dir, PACKAGES_FILE)
 	const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
