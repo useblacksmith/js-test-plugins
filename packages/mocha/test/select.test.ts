@@ -57,8 +57,8 @@ describe('selection', () => {
 		assert.deepEqual(run(), ['g'])
 	})
 
-	test('a lockfile change runs everything', () => {
-		repo.write('package-lock.json', '{}\n')
+	test('a Mocha config change runs everything', () => {
+		repo.write('.mocharc.json', '{}\n')
 		assert.deepEqual(run(), SPECS)
 	})
 
@@ -113,9 +113,9 @@ describe('files run in part with --grep', () => {
 		assert.deepEqual(affected(), ['d'])
 	})
 
-	test('a lockfile change drops the record of every test the next run leaves out', () => {
+	test('a Mocha config change drops the record of every test the next run leaves out', () => {
 		run()
-		repo.write('package-lock.json', '{ "changed": true }\n')
+		repo.write('.mocharc.json', '{ "color": false }\n')
 		assert.match(run('--', '--grep', 'first').output, /6 of 18 test\(s\)/)
 		assert.deepEqual(affected(), SPECS)
 	})
