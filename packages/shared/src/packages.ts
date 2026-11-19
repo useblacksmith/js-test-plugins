@@ -78,3 +78,17 @@ export function manifestShape(file: string): string | null {
 		return null
 	}
 }
+
+/**
+ * What a read of the file `absolute` is recorded as: the directory of its
+ * package for a file of a package installed in the repository at `repo`,
+ * null for any other file.
+ */
+export function packageOf(
+	repo: string | undefined,
+	absolute: string,
+): string | null {
+	return repo && isPackagePath(absolute)
+		? repositoryPackage(repo, absolute)
+		: null
+}

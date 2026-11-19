@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import {
 	isPackagePath,
+	packageDir,
+	packageOf,
 	repositoryPackage,
 } from '../../shared/src/packages.ts'
 import Module, { createRequire, syncBuiltinESMExports } from 'node:module'
@@ -271,8 +273,11 @@ function install(): void {
 	}
 
 	function read(file: string, content: boolean): void {
-		const absolute = path.resolve(file)
-		if (ignored(absolute) || !outputs.reads(absolute, content)) return
+		let absolute = path.resolve(file)
+		// A file of an installed package read as data: the package.
+		const installed = content ? packageOf(repo, absolute) : null
+		if (installed !== null) absolute = installed
+		else if (ignored(absolute) || !outputs.reads(absolute, content)) return
 		const to = target()
 		charge(to, absolute, content)
 		// A value read once and kept (a config loaded on first use) is never
@@ -416,7 +421,12 @@ function install(): void {
 					continue
 				}
 				const absolute = path.resolve(child.cwd, line)
-				if (!ignored(absolute) && outputs.reads(absolute, true)) {
+				// The child reports a package it loaded or read by its directory.
+				if (
+					packageDir(absolute) === absolute
+						? packageOf(repo, absolute) !== null
+						: !ignored(absolute) && outputs.reads(absolute, true)
+				) {
 					charge(child.to, absolute)
 				}
 			}

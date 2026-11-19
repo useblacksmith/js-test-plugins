@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { repositoryPackage } from '../../shared/src/packages.ts'
+import { packageOf, repositoryPackage } from '../../shared/src/packages.ts'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -99,6 +99,14 @@ function install(): void {
 				return
 			}
 			const absolute = path.resolve(file)
+			// A file of an installed package read as data: the package.
+			const installed = content
+				? packageOf(process.env[ENV_REPO], absolute)
+				: null
+			if (installed !== null) {
+				current.deps.add(installed)
+				return
+			}
 			if (isIgnored(absolute) || !current.outputs.reads(absolute, content))
 				return
 			;(content ? current.deps : current.probes).add(absolute)

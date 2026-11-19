@@ -4,11 +4,13 @@ import { fileURLToPath } from 'node:url'
 
 import {
 	CHILD_RECORD_ENV,
+	ENV_REPO,
 	Outputs,
 	WRITE_PREFIX,
 	isIgnored,
 	wrapFs,
 } from './fs-recorder.ts'
+import { packageOf } from './packages.ts'
 
 /**
  * Preloaded (`--import`) into every node process and worker thread a test
@@ -45,6 +47,9 @@ if (output) {
 	}
 	const record = (file: string, content = true) => {
 		const absolute = path.resolve(file)
+		// A file of an installed package the child loaded or read: the package.
+		const installed = content ? packageOf(process.env[ENV_REPO], absolute) : null
+		if (installed !== null) return report(installed)
 		if (isIgnored(absolute) || !outputs.reads(absolute, content)) return
 		report(absolute)
 	}
