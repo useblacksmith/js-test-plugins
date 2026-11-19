@@ -75,6 +75,18 @@ describe('selection', () => {
 	})
 })
 
+test('an option the command does not know is refused', () => {
+	const repo = new Repo('selection')
+	try {
+		const result = repo.cli('run', '--shadow', '--', GLOB)
+		assert.equal(result.status, 2)
+		assert.match(result.output, /unknown option for run: --shadow/)
+		assert.deepEqual(Repo.ran(result), [])
+	} finally {
+		repo.cleanup()
+	}
+})
+
 describe('files run in part with --grep', () => {
 	let repo: Repo
 	beforeEach(() => {

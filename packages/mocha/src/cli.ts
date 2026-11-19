@@ -388,6 +388,17 @@ async function main(): Promise<number> {
 	const split = rest.indexOf('--')
 	const own = split === -1 ? rest : rest.slice(0, split)
 	const mochaArgs = split === -1 ? [] : rest.slice(split + 1)
+	// An option this command does not know is refused, not ignored: a mistyped
+	// one would otherwise run a different selection than the one asked for.
+	const flags = command === 'run' ? ['--no-commit'] : ['--json']
+	const unknown = own.find(
+		(arg, index) =>
+			arg !== '--shard' && own[index - 1] !== '--shard' && !flags.includes(arg),
+	)
+	if (unknown !== undefined) {
+		console.error(`unknown option for ${command}: ${unknown}\n${USAGE}`)
+		return 2
+	}
 	const shardAt = own.indexOf('--shard')
 	const shard = shardAt === -1 ? null : parseShard(own[shardAt + 1])
 	logToStderr = command === 'affected' && own.includes('--json')
