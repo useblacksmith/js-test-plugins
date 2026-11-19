@@ -43,13 +43,19 @@ import {
 	type Tree,
 } from '../../shared/src/git.js'
 import { shardOwner } from './sequencer.js'
+import { readPackages, updatePackages } from './packages.js'
+import {
+	isPackagePath,
+	manifestShape,
+	packageVersion,
+} from '../../shared/src/packages.js'
 
 export const SNAPSHOT_FILE = 'blacksmith.json'
 export const UNSUPPORTED_VITEST =
 	'[blacksmith] @useblacksmith/vitest selects changed tests on Vitest 4.1.1 or newer 4.x, or 5.1.0 or newer; upgrade vitest, or set `runAllTests: true` and drop --changed'
 // Bumped whenever the snapshot's shape changes or the records an anchor
 // vouches for gain a kind of dependency, so an older snapshot is not trusted.
-const SNAPSHOT_VERSION = 7
+const SNAPSHOT_VERSION = 8
 
 /** A `dependencies` entry, compiled: test files matching `tests` depend on files matching `deps`; both root-relative. */
 export interface DependencyRule {
@@ -321,6 +327,45 @@ async function anchoredPaths(
 		}
 	})
 	return [...paths]
+}
+
+/**
+ * The tree the anchor compares: file content for the anchored paths, the
+ * installed version for each package a test file or the run loaded, and for
+ * a package.json no test read itself everything but its dependency fields
+ * (the packages say whether an install changed anything).
+ */
+async function currentTree(
+	vitest: Vitest,
+	repo: string,
+	dir: string,
+	rules: readonly DependencyRule[],
+): Promise<Tree> {
+	const tree = await anchorTree(
+		repo,
+		await anchoredPaths(vitest, repo, dir, rules),
+	)
+	const read = new Set<string>()
+	const records = await readRecords(vitest, dir)
+	for (const project of Object.values(records?.projects ?? {})) {
+		for (const file of project.modules) {
+			read.add(repoRelative(repo, path.resolve(vitest.config.root, file)))
+		}
+	}
+	for (const file of Object.keys(tree)) {
+		if (path.posix.basename(file) !== 'package.json' || read.has(file)) continue
+		const shape = manifestShape(path.join(repo, file))
+		if (shape !== null) tree[file] = shape
+	}
+	const packages = await readPackages(dir)
+	for (const file of [
+		...(packages?.global ?? []),
+		...Object.values(packages?.files ?? {}).flat(),
+	]) {
+		const version = packageVersion(path.join(repo, file))
+		if (version !== null) tree[file] = version
+	}
+	return tree
 }
 
 /**
@@ -661,10 +706,9 @@ export class TreeSnapshotProvider {
 			return null
 		}
 
-		const tree = await anchorTree(
-			repo,
-			await anchoredPaths(this.vitest, repo, dir, this.dependencies),
-		)
+		const tree = await currentTree(this.vitest, repo, dir, this.dependencies)
+		const packages = await readPackages(dir)
+		const globalPackages = new Set(packages?.global ?? [])
 		const changedPaths = await this.changedSince(repo, snapshot, tree)
 		const owns = await shardOwner(this.vitest)
 		// Entries without a record are test files vitest has never seen; a test
@@ -688,12 +732,22 @@ export class TreeSnapshotProvider {
 		const changed = new Set(uncovered)
 		const workflow = workflowPath()
 		const manifestDirs: string[] = []
+		const changedPackages = new Set<string>()
+		let lockfile = false
 		for (const relative of changedPaths) {
-			if (LOCKFILES.has(path.basename(relative)) || relative === workflow) {
+			if (relative === workflow || globalPackages.has(relative)) {
 				log(
 					`${relative} changed, running every test of the ${describeShard(shard)}`,
 				)
 				return null
+			}
+			if (isPackagePath(relative)) {
+				changedPackages.add(relative)
+				continue
+			}
+			if (LOCKFILES.has(path.basename(relative))) {
+				lockfile = true
+				continue
 			}
 			if (isManifest(relative)) manifestDirs.push(repoDir(relative))
 			changed.add(path.join(repo, relative))
@@ -720,6 +774,21 @@ export class TreeSnapshotProvider {
 				}
 			}
 		}
+		// A test file reruns with a package it loaded. One without a list of
+		// packages (browser mode, where Vite bundles them) reruns with the lockfile.
+		let viaPackages = 0
+		if (changedPackages.size > 0 || lockfile) {
+			for (const [test] of await recordedDependencies(this.vitest, dir)) {
+				if (changed.has(test) || !owns(test)) continue
+				const loaded = packages?.files[repoRelative(repo, test)]
+				if (
+					loaded ? loaded.some((dir) => changedPackages.has(dir)) : lockfile
+				) {
+					changed.add(test)
+					viaPackages++
+				}
+			}
+		}
 		const triggered = this.dependencies.filter((rule) =>
 			changedPaths.some((relative) =>
 				rule.deps(rootRelative(root, path.join(repo, relative))),
@@ -738,7 +807,7 @@ export class TreeSnapshotProvider {
 			}
 		}
 		log(
-			`${changedPaths.length} files changed since ${snapshot.head.slice(0, 12)}, ${uncovered.size} test files not covered by it${viaManifest > 0 ? `, ${viaManifest} test files under a changed manifest` : ''}${mapped > 0 ? `, ${mapped} test files via dependencies` : ''}`,
+			`${changedPaths.length} files changed since ${snapshot.head.slice(0, 12)}, ${uncovered.size} test files not covered by it${viaManifest > 0 ? `, ${viaManifest} test files under a changed manifest` : ''}${viaPackages > 0 ? `, ${viaPackages} test files via installed packages` : ''}${mapped > 0 ? `, ${mapped} test files via dependencies` : ''}`,
 		)
 		return [...changed]
 	}
@@ -1127,6 +1196,12 @@ export class SnapshotRecorder implements Reporter {
 			const cut = this.partial || namePattern || reason === 'interrupted'
 			await store.update(modules, (module) => cut || containsOnly(module))
 		}
+		await updatePackages(
+			this.vitest,
+			await repoRoot(this.vitest.config.root),
+			this.vitest.vite.config.cacheDir,
+			process.env[ENV_RECORD_ROOT],
+		)
 		await this.reportFiltered()
 		// A failed run still vouches for the files that passed; the failed ones
 		// are left out and rerun next time. An interrupted run left files unrun,
@@ -1191,14 +1266,11 @@ export class SnapshotRecorder implements Reporter {
 			shard: shard ?? null,
 			job: jobId(),
 			projects: projectNames(this.vitest),
-			tree: await anchorTree(
+			tree: await currentTree(
+				this.vitest,
 				repo,
-				await anchoredPaths(
-					this.vitest,
-					repo,
-					cacheDir,
-					this.provider.dependencies,
-				),
+				cacheDir,
+				this.provider.dependencies,
 			),
 			tests: vouched.map((file) => repoRelative(repo, file)).sort(),
 		}

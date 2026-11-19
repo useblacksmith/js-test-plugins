@@ -12,13 +12,16 @@ import {
 	ENV_OWN_RECORDS,
 	FINAL_SUFFIX,
 	ENV_RECORD_ROOT,
+	ENV_REPO,
 	Outputs,
+	PACKAGES_SUFFIX,
 	WRITE_PREFIX,
 	copyProperties,
 	isIgnored,
 	workerRecordPath,
 	wrapFs,
 } from '../../shared/src/fs-recorder.ts'
+import { packageOf } from '../../shared/src/packages.ts'
 
 /**
  * Runs as the first setup file of every test file. Vitest records what a
@@ -125,10 +128,104 @@ function outputs(): Outputs {
 	return current.outputs
 }
 
+const PACKAGES = Symbol.for('blacksmith.recordReads.packages')
+
+interface PackageState {
+	/** What each installed package, or file outside one, was seen loading from an installed package: directories. */
+	edges: Map<string, Set<string>>
+	/** The packages the running test file read a file of, or loaded in a child process. */
+	read: { test: string | undefined; dirs: Set<string> }
+	hooked: boolean
+}
+
+// On the shared builtin, like the context: Node loads a package once per
+// process, whichever test file or `vm` context asks for it first.
+const packages = ((shared[PACKAGES] as PackageState | undefined) ??= {
+	edges: new Map(),
+	read: { test: undefined, dirs: new Set() },
+	hooked: false,
+}) as PackageState
+
+function packagesRead(): Set<string> {
+	const test = workerState()?.filepath
+	if (packages.read.test !== test) packages.read = { test, dirs: new Set() }
+	return packages.read.dirs
+}
+
+/** Notes that the module at `parent` loaded the one at `loaded`, when that is in an installed package. */
+function loadedPackage(parent: string | undefined, loaded: string): void {
+	const repo = process.env[ENV_REPO]
+	const to = packageOf(repo, loaded)
+	if (to === null || parent === undefined) return
+	const from = packageOf(repo, parent) ?? parent
+	if (from === to) return
+	let known = packages.edges.get(from)
+	if (!known) packages.edges.set(from, (known = new Set()))
+	known.add(to)
+}
+
+function filePath(url: string | undefined): string | undefined {
+	if (url === undefined) return undefined
+	try {
+		return url.startsWith('file:') ? fileURLToPath(url) : url
+	} catch {
+		return undefined
+	}
+}
+
+// Vitest's module graph ends at the first installed package of a chain: what
+// that package loads in turn is Node's business, and seen here.
+if (!packages.hooked) {
+	packages.hooked = true
+	const nodeModule = require('node:module') as {
+		_load: (request: string, parent: unknown, isMain: boolean) => unknown
+		_resolveFilename: (request: string, parent: unknown) => string
+		registerHooks?: (hooks: {
+			resolve: (
+				specifier: string,
+				context: { parentURL?: string },
+				next: (specifier: string, context: unknown) => { url: string },
+			) => { url: string }
+		}) => unknown
+	}
+	if (!nodeModule.registerHooks) {
+		// A Node without synchronous hooks: `require` at least, which is how
+		// one CommonJS package loads the next.
+		const load = nodeModule._load
+		nodeModule._load = function (this: unknown, request, parent, isMain) {
+			try {
+				loadedPackage(
+					(parent as { filename?: string } | undefined)?.filename,
+					nodeModule._resolveFilename(request, parent),
+				)
+			} catch {}
+			return load.call(this, request, parent, isMain)
+		}
+	}
+	try {
+		nodeModule.registerHooks?.({
+			resolve(specifier, context, next) {
+				const resolved = next(specifier, context)
+				try {
+					const loaded = filePath(resolved.url)
+					if (loaded) loadedPackage(filePath(context.parentURL), loaded)
+				} catch {}
+				return resolved
+			},
+		})
+	} catch {}
+}
+
 function record(file: string, cwd = process.cwd(), content = true): void {
 	const set = dependencies()
 	if (!set) return
 	const absolute = path.resolve(cwd, file)
+	// A file of an installed package read as data: the package.
+	const installed = content ? packageOf(process.env[ENV_REPO], absolute) : null
+	if (installed !== null) {
+		packagesRead().add(installed)
+		return
+	}
 	if (isIgnored(absolute)) return
 	if (outputs().reads(absolute, content)) set.add(absolute)
 }
@@ -347,6 +444,7 @@ afterAll(() => {
 		outstanding().delete(child)
 	}
 	writeOwnRecord()
+	writePackages()
 })
 
 // A vitest older than 5.1 keeps no dependency set per test file: this setup
@@ -457,6 +555,90 @@ function writeOwnRecord(): void {
 	const late = new Set<string>()
 	state.dependencies = late
 	pending.record = { file, test: state.filepath, setupFiles, graph, files, late }
+}
+
+/** Where the packages a test file loaded are left for the plugin's reporter. */
+function packagesPath(root: string, project: string, test: string): string {
+	return `${workerRecordPath(root, project, test)}${PACKAGES_SUFFIX}`
+}
+
+interface PendingPackages {
+	file: string
+	test: string
+	project: string
+	roots: readonly string[]
+	graph: NonNullable<WorkerState['evaluatedModules']>
+	read: Set<string>
+}
+
+const PENDING_PACKAGES = Symbol.for('blacksmith.vitest.pendingPackages')
+const pendingPackages = ((
+	process as unknown as {
+		[PENDING_PACKAGES]?: { last?: PendingPackages; exits?: true }
+	}
+)[PENDING_PACKAGES] ??= {})
+
+/** The installed packages reached from `roots`: through Vitest's graph to the first of a chain, through Node's loads from there. */
+function loadedPackages(pending: PendingPackages): string[] {
+	const repo = process.env[ENV_REPO]
+	const found = new Set<string>(pending.read)
+	const queue: string[] = []
+	for (const file of recordedFiles(pending.graph, pending.roots, new Set())) {
+		queue.push(packageOf(repo, file) ?? file)
+	}
+	const seen = new Set<string>()
+	while (queue.length > 0) {
+		const from = queue.pop()
+		if (from === undefined || seen.has(from)) continue
+		seen.add(from)
+		if (packageOf(repo, path.join(from, 'package.json')) === from) found.add(from)
+		for (const to of packages.edges.get(from) ?? []) queue.push(to)
+	}
+	return [...found].sort()
+}
+
+function writePendingPackages(): void {
+	const last = pendingPackages.last
+	if (!last) return
+	try {
+		mkdir(path.dirname(last.file), { recursive: true })
+		const partial = `${last.file}.${process.pid}.${workerThreads.threadId}.tmp`
+		write(
+			partial,
+			JSON.stringify({
+				test: last.test,
+				project: last.project,
+				packages: loadedPackages(last),
+			}),
+		)
+		fs.renameSync(partial, last.file)
+	} catch {}
+}
+
+/**
+ * Leaves the packages the test file loaded, and again when the worker moves
+ * on or ends: teardown and imports still in flight load packages too.
+ */
+function writePackages(): void {
+	writePendingPackages()
+	const state = workerState()
+	const root = process.env[ENV_RECORD_ROOT]
+	const graph = state?.evaluatedModules
+	if (!state?.filepath || !root || !graph) return
+	const project = state.config?.name ?? ''
+	pendingPackages.last = {
+		file: packagesPath(root, project, state.filepath),
+		test: state.filepath,
+		project,
+		roots: [state.filepath, ...(state.config?.setupFiles ?? [])],
+		graph,
+		read: packagesRead(),
+	}
+	writePendingPackages()
+	if (!pendingPackages.exits) {
+		pendingPackages.exits = true
+		process.on('exit', writePendingPackages)
+	}
 }
 
 type Wrappable = Record<string, unknown>
