@@ -226,6 +226,38 @@ export class Project {
 		].join('\n')
 	}
 
+	private testFile(name: string, modules: string[], body: string): string {
+		const esm = this.driver.style === 'esm'
+		return [
+			...(this.driver.prelude === '' ? [] : [this.driver.prelude]),
+			...['assert', ...modules].map((module) =>
+				esm
+					? `import ${module.replace('node:', '')} from '${module.includes(':') ? module : `node:${module}`}'`
+					: `const ${module} = require('node:${module}')`,
+			),
+			`it('${name}', () => { ${body} })`,
+			'',
+		].join('\n')
+	}
+
+	/** A test file named `name` that reads `file` (relative to the project) through `fs`. */
+	readingTest(name: string, file: string): string {
+		return this.testFile(
+			name,
+			['fs'],
+			`assert.ok(fs.readFileSync(${JSON.stringify(file)}, 'utf8').length > 0)`,
+		)
+	}
+
+	/** A test file named `name` that loads the package `pkg` in a node child process. */
+	spawningTest(name: string, pkg: string): string {
+		return this.testFile(
+			name,
+			['child_process'],
+			`assert.equal(child_process.execFileSync(process.execPath, ['-e', "console.log(require('${pkg}')())"]).toString().trim(), '${pkg}')`,
+		)
+	}
+
 	read(file: string): string {
 		return readFileSync(path.join(this.cwd, file), 'utf8')
 	}

@@ -4,6 +4,7 @@ import { diffTrees } from '../../shared/src/git.ts'
 import { shardFor } from '../../shared/src/shard.ts'
 import {
 	RECORDS_VERSION,
+	readManifests,
 	recordedPaths,
 	select,
 	type Decision,
@@ -125,10 +126,11 @@ async function affected(owned: string[], coverage: boolean): Promise<Pending> {
 		// The recorded paths too: one that did not exist has no entry in the anchor, and appears in the diff once it does.
 		changed = diffTrees(
 			anchor.tree,
-			await currentTree(ctx, [
-				...Object.keys(anchor.tree),
-				...recordedPaths(records),
-			]),
+			await currentTree(
+				ctx,
+				[...Object.keys(anchor.tree), ...recordedPaths(records)],
+				readManifests(records),
+			),
 		)
 		const always = new Set(alwaysPaths(ctx))
 		const trigger = changed.find((file) => always.has(file))

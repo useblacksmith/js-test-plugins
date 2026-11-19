@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto'
-import { packageOf, repositoryPackage } from '../../shared/src/packages.ts'
+import {
+	isPackagePath,
+	packageOf,
+	repositoryPackage,
+} from '../../shared/src/packages.ts'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -50,12 +54,31 @@ export interface Piece {
 	deps: string[]
 	/** Paths only asked about (`stat`, `exists`): a dependency unless it is a directory. */
 	probes: string[]
+	/** package.json files the test read itself: compared in full, dependency fields included. */
+	manifests: string[]
+}
+
+/**
+ * Whether the read under way was made by a file of the repository: the frame
+ * nearest to the call decides. Jest's resolver, Babel and browserslist read
+ * the package.json files above every module, for fields of their own.
+ */
+function readByTest(): boolean {
+	const lines = (new Error().stack ?? '').split('\n').slice(1)
+	const frame = lines.find(
+		(line) =>
+			!line.includes('node:') &&
+			!line.includes(`${path.sep}shared${path.sep}src${path.sep}fs-recorder.`) &&
+			!line.includes(here),
+	)
+	return frame !== undefined && !isPackagePath(frame)
 }
 
 interface Current {
 	test: string
 	deps: Set<string>
 	probes: Set<string>
+	manifests: Set<string>
 	outputs: Outputs
 	childDir: string
 }
@@ -110,6 +133,8 @@ function install(): void {
 			if (isIgnored(absolute) || !current.outputs.reads(absolute, content))
 				return
 			;(content ? current.deps : current.probes).add(absolute)
+			if (content && path.basename(absolute) === 'package.json' && readByTest())
+				current.manifests.add(absolute)
 		},
 		(file) => {
 			if (!current) return
@@ -185,6 +210,7 @@ export function begin(
 		test,
 		deps: new Set(),
 		probes: new Set(),
+		manifests: new Set(),
 		outputs: new Outputs(),
 		childDir,
 	}
@@ -198,7 +224,11 @@ export function end(modules: Iterable<string>): void {
 	if (!dir || !done) return
 	const repo = process.env[ENV_REPO]
 	for (const file of modules) {
-		if (!isIgnored(file)) done.deps.add(file)
+		if (!isIgnored(file)) {
+			done.deps.add(file)
+			// `require('./package.json')`: the test holds all of it.
+			if (path.basename(file) === 'package.json') done.manifests.add(file)
+		}
 		else {
 			const installed = repo ? repositoryPackage(repo, file) : null
 			if (installed !== null) done.deps.add(installed)
@@ -218,6 +248,7 @@ export function end(modules: Iterable<string>): void {
 		test: done.test,
 		deps: [...done.deps],
 		probes: [...done.probes].filter((file) => !done.deps.has(file)),
+		manifests: [...done.manifests],
 	}
 	try {
 		raw.mkdirSync(path.join(dir, 'tests'), { recursive: true })

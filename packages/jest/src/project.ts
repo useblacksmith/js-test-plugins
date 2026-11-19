@@ -25,6 +25,7 @@ import {
 } from '../../shared/src/git.ts'
 import {
 	RECORDS_VERSION,
+	readManifests,
 	recordedPaths,
 	ruleGlobs,
 	type Records,
@@ -104,6 +105,7 @@ async function ruleFiles({ repo, options }: State): Promise<string[]> {
 export async function currentTree(
 	ctx: State,
 	recorded: Iterable<string>,
+	read: ReadonlySet<string>,
 ): Promise<Tree> {
 	const paths = [...recorded]
 	const always = alwaysPaths(ctx)
@@ -119,6 +121,8 @@ export async function currentTree(
 	}
 	for (const file of always) {
 		if (path.posix.basename(file) !== 'package.json' || !(file in tree)) continue
+		// One a test read itself is compared in full: its dependency fields are that test's input.
+		if (read.has(file)) continue
 		const shape = manifestShape(path.join(ctx.repo, file))
 		if (shape !== null) tree[file] = shape
 	}
@@ -135,7 +139,7 @@ export async function writeRecords(
 	shard: Shard | null,
 	records: Records,
 ): Promise<number> {
-	const tree = await currentTree(ctx, recordedPaths(records))
+	const tree = await currentTree(ctx, recordedPaths(records), readManifests(records))
 	mkdirSync(dataDir(ctx.cwd), { recursive: true })
 	writeFileSync(recordsFile(ctx, shard), JSON.stringify(records))
 	writeFileSync(

@@ -107,6 +107,43 @@ function packageScenarios(): Scenario[] {
 			},
 		},
 		{
+			name: 'a package.json change to its dependency fields reruns everything once a test read the file itself',
+			packages: true,
+			async run(project) {
+				project.change(
+					'test/manifest.test.js',
+					project.readingTest('manifest', 'package.json'),
+				)
+				const run = await project.run()
+				assert.deepEqual(run.ran, [...ALL, 'manifest'], run.output)
+				const manifest = JSON.parse(project.read('package.json')) as object
+				project.change(
+					'package.json',
+					`${JSON.stringify({ ...manifest, dependencies: { some: '^1.0.0' } }, null, 2)}\n`,
+				)
+				await expectRun(project, [...ALL, 'manifest'])
+			},
+		},
+		{
+			name: 'a new version of a package a test reads a file of, or loads in a child process, reruns that test file',
+			packages: true,
+			async run(project) {
+				project.install(USED, '1.0.0')
+				project.install(UNUSED, '1.0.0')
+				project.change(
+					'test/asset.test.js',
+					project.readingTest('asset', `node_modules/${USED}/index.js`),
+				)
+				project.change('test/spawn.test.js', project.spawningTest('spawn', UNUSED))
+				const run = await project.run()
+				assert.deepEqual(run.ran, [...ALL, 'asset', 'spawn'], run.output)
+				bump(project, USED)
+				await expectRun(project, ['asset'])
+				bump(project, UNUSED)
+				await expectRun(project, ['spawn'])
+			},
+		},
+		{
 			name: 'a new version of a package the config loaded reruns everything',
 			packages: true,
 			async run(project) {

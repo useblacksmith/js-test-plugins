@@ -214,6 +214,7 @@ function alwaysPaths({ cwd, repo }: Context): string[] {
 async function currentTree(
 	ctx: Context,
 	recorded: Iterable<string>,
+	read: ReadonlySet<string>,
 ): Promise<Tree> {
 	const paths = [...recorded]
 	const always = alwaysPaths(ctx)
@@ -229,6 +230,8 @@ async function currentTree(
 	}
 	for (const file of always) {
 		if (path.posix.basename(file) !== 'package.json' || !(file in tree)) continue
+		// One a test read itself is compared in full: its dependency fields are that test's input.
+		if (read.has(file)) continue
 		const shape = manifestShape(path.join(ctx.repo, file))
 		if (shape !== null) tree[file] = shape
 	}
@@ -315,7 +318,11 @@ async function affected(
 	} else {
 		changed = diffTrees(
 			anchor.tree,
-			await currentTree(ctx, Object.keys(anchor.tree)),
+			await currentTree(
+				ctx,
+				Object.keys(anchor.tree),
+				recordedPaths(records),
+			),
 		)
 		const always = new Set(alwaysPaths(ctx))
 		const trigger = changed.find((file) => always.has(file))
@@ -356,7 +363,7 @@ async function commit(ctx: Context, runFiles: string[]): Promise<void> {
 	for (const spec of Object.keys(merged.files)) {
 		if (!owned.has(spec)) delete merged.files[spec]
 	}
-	const tree = await currentTree(ctx, recordedPaths(merged))
+	const tree = await currentTree(ctx, recordedPaths(merged), recordedPaths(merged))
 	writeFileSync(recordsFile, JSON.stringify(merged))
 	writeFileSync(
 		path.join(ctx.dir, `anchor${suffix(pending.shard)}.json`),

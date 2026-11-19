@@ -14,6 +14,8 @@ export interface FileRecord {
 	deps: string[]
 	/** Full name of every test in the file → how it ended the last time it ran. */
 	tests: Record<string, TestState>
+	/** package.json files among `deps` the test read itself: compared in full, dependency fields included. */
+	manifests?: string[]
 	/** The file failed outside any test: a syntax error, a failed `beforeAll`. */
 	failed?: boolean
 }
@@ -152,6 +154,9 @@ export function mergeRecords(
 		else {
 			out.files[spec] = {
 				deps: union(previous.deps, entry.deps),
+				...(previous.manifests || entry.manifests
+					? { manifests: union(previous.manifests, entry.manifests ?? []) }
+					: {}),
 				tests: { ...previous.tests, ...entry.tests },
 				...(entry.failed || previous.failed ? { failed: true } : {}),
 			}
@@ -169,4 +174,11 @@ export function recordedPaths(records: Records): Set<string> {
 		for (const file of entry.deps) paths.add(file)
 	}
 	return paths
+}
+
+/** Every package.json a test file read itself. */
+export function readManifests(records: Records): Set<string> {
+	return new Set(
+		Object.values(records.files).flatMap((entry) => entry.manifests ?? []),
+	)
 }
