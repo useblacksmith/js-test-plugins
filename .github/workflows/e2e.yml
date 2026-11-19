@@ -37,7 +37,9 @@ jobs:
         working-directory: packages/${{ matrix.plugin }}
         run: |
           pnpm pack --pack-destination "$RUNNER_TEMP/tarball"
-          echo "tarball=$(ls "$RUNNER_TEMP"/tarball/*.tgz)" >> "$GITHUB_OUTPUT"
+          # Fails the step when nothing was packed: an empty path would run the source instead.
+          tarball=$(ls "$RUNNER_TEMP"/tarball/*.tgz)
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
       - name: Run the scenarios against the real Actions cache
         working-directory: packages/${{ matrix.plugin }}
         env:
