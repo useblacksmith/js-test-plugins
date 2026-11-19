@@ -10,6 +10,7 @@ import {
 	readFileSync,
 	rmSync,
 	writeFileSync,
+	realpathSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -27,7 +28,7 @@ import { version as vitestVersion } from 'vitest/node'
 
 import { SNAPSHOT_FILE, type Snapshot } from '../src/affected.ts'
 import { cacheKey, runtimeId } from '../src/cache.ts'
-import { anchorTree, blobsAt, diffTrees } from '../src/git.ts'
+import { anchorTree, blobsAt, diffTrees } from '../../shared/src/git.ts'
 import { supportsVersion } from '../src/index.ts'
 import { OWN_RECORDS_FILE, recordsNatively } from '../src/records.ts'
 
@@ -858,11 +859,25 @@ describe('installed under node_modules', () => {
 			path.join(packageRoot, 'package.json'),
 			path.join(installed, 'package.json'),
 		)
-		cpSync(
-			path.join(packageRoot, 'node_modules', 'vitest'),
-			path.join(installed, 'node_modules', 'vitest'),
-			{ recursive: true, dereference: true },
-		)
+		const vitest = realpathSync(path.join(packageRoot, 'node_modules', 'vitest'))
+		cpSync(vitest, path.join(installed, 'node_modules', 'vitest'), {
+			recursive: true,
+			dereference: true,
+		})
+		// pnpm keeps a package's dependencies beside it, not in the
+		// workspace package's node_modules: the copy needs them at its side too.
+		const siblings = path.dirname(vitest)
+		for (const name of readdirSync(siblings)) {
+			const names = name.startsWith('@')
+				? readdirSync(path.join(siblings, name)).map((scoped) => `${name}/${scoped}`)
+				: [name]
+			for (const dependency of names) {
+				const link = path.join(installed, 'node_modules', dependency)
+				if (dependency === 'vitest' || name.startsWith('.')) continue
+				mkdirSync(path.dirname(link), { recursive: true })
+				symlinkSync(realpathSync(path.join(siblings, dependency)), link)
+			}
+		}
 		const config = path.join(repo.cwd, 'vitest.config.ts')
 		writeFileSync(
 			config,

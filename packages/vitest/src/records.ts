@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import { FINAL_SUFFIX, workerRecordPath } from './fs-recorder.js'
+import { FINAL_SUFFIX, workerRecordPath } from '../../shared/src/fs-recorder.js'
 
 import type { TestModule, TestProject, Vitest } from 'vitest/node'
 

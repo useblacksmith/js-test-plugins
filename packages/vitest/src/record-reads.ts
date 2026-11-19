@@ -18,7 +18,7 @@ import {
 	isIgnored,
 	workerRecordPath,
 	wrapFs,
-} from './fs-recorder.ts'
+} from '../../shared/src/fs-recorder.ts'
 
 /**
  * Runs as the first setup file of every test file. Vitest records what a
@@ -151,7 +151,9 @@ wrapFs(
 /** Beside this module; `.ts` when the plugin runs from source (its own test fixtures). */
 const recordChild = fileURLToPath(
 	new URL(
-		import.meta.url.endsWith('.ts') ? './record-child.ts' : './record-child.js',
+		import.meta.url.endsWith('.ts')
+			? '../../shared/src/record-child.ts'
+			: '../../shared/src/record-child.js',
 		import.meta.url,
 	),
 )

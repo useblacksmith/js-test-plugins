@@ -5,8 +5,8 @@
 		"rewriteRelativeImportExtensions": true,
 		"noEmit": false,
 		"declaration": true,
-		"rootDir": "src",
+		"rootDir": "..",
 		"outDir": "dist"
 	},
-	"include": ["src"]
+	"include": ["src", "../shared/src"]
 }

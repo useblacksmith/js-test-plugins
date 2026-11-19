@@ -6,9 +6,9 @@ import { fileURLToPath } from 'node:url'
 import type { Plugin } from 'vitest/config'
 import type { Vitest } from 'vitest/node'
 import { version as vitestVersion } from 'vitest/node'
-import { ENV_OWN_RECORDS, ENV_RECORD_ROOT, ENV_REPO } from './fs-recorder.js'
+import { ENV_OWN_RECORDS, ENV_RECORD_ROOT, ENV_REPO } from '../../shared/src/fs-recorder.js'
 import { dependencyStore, recordsNatively, recordsOwn } from './records.js'
-import { repoRoot } from './git.js'
+import { repoRoot } from '../../shared/src/git.js'
 
 import {
 	compileDependencies,

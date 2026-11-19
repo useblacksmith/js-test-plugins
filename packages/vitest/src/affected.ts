@@ -6,7 +6,7 @@ import path from 'node:path'
 import picomatch from 'picomatch'
 
 import { recordBrowserDependencies } from './browser.js'
-import { ENV_RECORD_ROOT } from './fs-recorder.js'
+import { ENV_RECORD_ROOT } from '../../shared/src/fs-recorder.js'
 import {
 	dependencyStore,
 	envFiles,
@@ -41,7 +41,7 @@ import {
 	pathsUnder,
 	repoRoot,
 	type Tree,
-} from './git.js'
+} from '../../shared/src/git.js'
 import { shardOwner } from './sequencer.js'
 
 export const SNAPSHOT_FILE = 'blacksmith.json'

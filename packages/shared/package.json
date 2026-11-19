@@ -1,0 +1,14 @@
+{
+	"name": "@useblacksmith/test-plugins-shared",
+	"private": true,
+	"description": "Code both plugins compile into their own dist/; never published",
+	"type": "module",
+	"license": "MIT",
+	"scripts": {
+		"check:types": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@types/node": "^26.6.6",
+		"typescript": "^7.0.2"
+	}
+}
