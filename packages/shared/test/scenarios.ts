@@ -136,7 +136,9 @@ export const scenarios: Scenario[] = [
 				assert.notEqual(failed.status, 0, failed.output)
 				assert.deepEqual(failed.ran, ['c'], failed.output)
 			}
-			project.change('data/c.txt', 'ok\n')
+			// Not the first content again: a tree identical to one that passed may
+			// restore that run's record, and skipping the test file is then right.
+			project.change('data/c.txt', 'ok\nfixed\n')
 			await expectRun(project, ['c'])
 			await expectRun(project, [])
 		},
