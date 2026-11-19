@@ -1,5 +1,7 @@
 import picomatch from 'picomatch'
 
+import { isPackagePath } from '../../shared/src/packages.ts'
+
 /**
  * The dependency record and the rules that read it. Jest gives every test
  * file a module registry of its own, so the record is one dependency list per
@@ -143,8 +145,10 @@ export function mergeRecords(
 	// look up, so what the record already names stays.
 	const complete = Object.keys(out.files).every((spec) => spec in run.files)
 	if (Object.keys(run.files).length > 0) {
+		// Packages stay either way: with a warm transform cache Jest does not
+		// load the transformer's packages, and a later run without it would.
 		out.global = complete
-			? [...run.global].sort()
+			? union(out.global.filter(isPackagePath), run.global)
 			: union(out.global, run.global)
 	}
 	for (const [spec, entry] of Object.entries(run.files)) {
