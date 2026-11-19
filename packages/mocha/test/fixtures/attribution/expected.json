@@ -1,0 +1,8 @@
+{
+ "test/a.test.js": ["src/loadtime.js", "data/loadtime.json", "src/config.js", "data/config.json", "data/hook.json", "data/a.json", "scripts/child.js", "scripts/child-dep.js", "data/child.txt", "data/leak.json"],
+ "test/b.test.js": ["src/loadtime.js", "data/loadtime.json", "src/config.js", "data/config.json", "data/b.json", "scripts/worker.js", "data/worker.txt", "scripts/child.js", "scripts/child-dep.js", "data/child.txt"],
+ "test/c.test.mjs": ["src/esm-loadtime.mjs", "data/esm-loadtime.json"],
+ "test/d.test.mjs": ["src/esm-loadtime.mjs", "data/esm-loadtime.json"],
+ "test/e.test.js": ["src/loadtime.js", "data/loadtime.json"],
+ "test/f.test.js": ["src/loadtime.js", "data/loadtime.json"]
+}

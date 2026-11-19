@@ -1,0 +1,43 @@
+{
+	"name": "@useblacksmith/mocha",
+	"version": "0.1.0",
+	"description": "Runs only the Mocha tests affected since the last run, with Blacksmith-backed caching",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/useblacksmith/js-test-plugins.git",
+		"directory": "packages/mocha"
+	},
+	"bin": {
+		"blacksmith-mocha": "./dist/mocha/src/cli.js"
+	},
+	"exports": {
+		"./register": "./dist/mocha/src/register.js",
+		"./mocharc": "./dist/mocha/src/mocharc.cjs"
+	},
+	"files": [
+		"dist"
+	],
+	"engines": {
+		"node": ">=22.15.0"
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"prepack": "npm run build",
+		"check:types": "tsc --noEmit",
+		"test": "node --test --test-concurrency=1 test/*.test.ts"
+	},
+	"peerDependencies": {
+		"mocha": ">=10.0.0"
+	},
+	"dependencies": {
+		"picomatch": "4.0.7"
+	},
+	"devDependencies": {
+		"@types/node": "^26.6.6",
+		"@types/picomatch": "^4.0.3",
+		"mocha": "^11.7.0",
+		"typescript": "^7.0.2"
+	}
+}
