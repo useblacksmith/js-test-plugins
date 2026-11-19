@@ -315,8 +315,12 @@ async function commit(ctx: Context, runFiles: string[]): Promise<void> {
 		.map((file) => readJson<RunRecord>(file))
 		.filter((run) => run !== null)
 	const recordsFile = path.join(ctx.dir, `records${suffix(pending.shard)}.json`)
+	// A changed lockfile or config is in no test's dependencies, yet stales every
+	// record: a test this run left out (`--grep`, `--bail`) keeps none.
+	const always = new Set(alwaysPaths(ctx))
+	const staleAll = pending.changed.some((file) => always.has(file))
 	const merged = mergeRecords(
-		readJson<Records>(recordsFile),
+		staleAll ? null : readJson<Records>(recordsFile),
 		runs,
 		pending.changed,
 		ctx.options,

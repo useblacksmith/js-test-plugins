@@ -108,6 +108,13 @@ describe('files run in part with --grep', () => {
 		assert.deepEqual(affected(), ['d'])
 	})
 
+	test('a lockfile change drops the record of every test the next run leaves out', () => {
+		run()
+		repo.write('package-lock.json', '{ "changed": true }\n')
+		assert.match(run('--', '--grep', 'first').output, /6 of 18 test\(s\)/)
+		assert.deepEqual(affected(), SPECS)
+	})
+
 	test('shards that each ran part of a file merge into one record', () => {
 		run()
 		repo.append('src/shared.js', '// edit\n')
