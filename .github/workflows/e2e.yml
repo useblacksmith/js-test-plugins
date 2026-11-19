@@ -1,0 +1,46 @@
+name: E2E
+
+# Each plugin as npm would install it, run on the shared scenarios against
+# this job's real Actions cache. The CI workflow runs the same scenarios from
+# source against a fake cache.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scenarios:
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: [vitest, mocha, jest]
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+      - run: corepack enable   # pnpm, at the version package.json pins
+      - run: pnpm install --frozen-lockfile
+      - name: Pack the plugin
+        id: pack
+        working-directory: packages/${{ matrix.plugin }}
+        run: |
+          pnpm pack --pack-destination "$RUNNER_TEMP/tarball"
+          echo "tarball=$(ls "$RUNNER_TEMP"/tarball/*.tgz)" >> "$GITHUB_OUTPUT"
+      - name: Run the scenarios against the real Actions cache
+        working-directory: packages/${{ matrix.plugin }}
+        env:
+          BLACKSMITH_E2E_CACHE: real
+          BLACKSMITH_E2E_TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: pnpm run test:e2e
