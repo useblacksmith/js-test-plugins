@@ -272,12 +272,31 @@ function install(): void {
 		}
 	}
 
+	/** Whether the read under way was made by an installed package: the frame nearest to the call decides. */
+	function readByPackage(): boolean {
+		const frame = (new Error().stack ?? '')
+			.split('\n')
+			.slice(1)
+			.find(
+				(line) =>
+					!line.includes('node:') &&
+					!line.includes(
+						`${path.sep}shared${path.sep}src${path.sep}fs-recorder.`,
+					) &&
+					!line.includes(here),
+			)
+		return frame !== undefined && isPackagePath(frame)
+	}
+
 	function read(file: string, content: boolean): void {
 		let absolute = path.resolve(file)
 		// A file of an installed package read as data: the package.
 		const installed = content ? packageOf(repo, absolute) : null
 		if (installed !== null) absolute = installed
 		else if (ignored(absolute) || !outputs.reads(absolute, content)) return
+		// The root package.json read by a tool (Babel, browserslist) for a field
+		// of its own: its fields outside the dependencies rerun everything as it is.
+		if (rel(absolute) === 'package.json' && readByPackage()) return
 		const to = target()
 		charge(to, absolute, content)
 		// A value read once and kept (a config loaded on first use) is never
