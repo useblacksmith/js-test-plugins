@@ -13,6 +13,10 @@ const driver: Driver = {
 	runner: 'jest',
 	source: path.join(packageRoot, 'src', 'index.ts'),
 	cacheDir: 'node_modules/.cache/blacksmith-jest',
+	tracksPackages: true,
+	withTool: (plugin, tool) => ({
+		'jest.config.js': `require(${JSON.stringify(tool)})\nconst { withBlacksmith } = require(${JSON.stringify(plugin)})\nmodule.exports = withBlacksmith({ watchman: false })\n`,
+	}),
 	config: (plugin) => ({
 		'jest.config.js': `const { withBlacksmith } = require(${JSON.stringify(plugin)})\nmodule.exports = withBlacksmith({ watchman: false })\n`,
 	}),

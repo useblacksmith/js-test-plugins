@@ -13,6 +13,8 @@ const ALL = ['a', 'b', 'c']
 
 interface Scenario {
 	name: string
+	/** Only for a plugin that tracks installed packages, or only for one that does not. */
+	packages?: boolean
 	/** Only meaningful when the record travels through a cache. */
 	cacheOnly?: true
 	run(project: Project, cached: boolean): Promise<void>
@@ -49,6 +51,81 @@ function reruns(
 			await expectRun(project, [])
 		},
 	}
+}
+
+const USED = 'used-package'
+const UNUSED = 'unused-package'
+
+/** The sample with two installed packages, one of which the test file `used-package` loads; everything has run once. */
+async function withPackages(project: Project): Promise<void> {
+	project.install(USED, '1.0.0')
+	project.install(UNUSED, '1.0.0')
+	project.change(`test/${USED}.test.js`, project.packageTest(USED))
+	const run = await project.run()
+	assert.equal(run.status, 0, run.output)
+	assert.deepEqual(run.ran, [...ALL, USED], run.output)
+}
+
+/** What an install does: a new version in node_modules and a changed lockfile. */
+function bump(project: Project, name: string): void {
+	project.install(name, '1.1.0')
+	project.change('package-lock.json', `{ "bumped": "${name}" }\n`)
+}
+
+function packageScenarios(): Scenario[] {
+	return [
+		{
+			name: 'a new version of a package reruns the test files that loaded it',
+			packages: true,
+			async run(project) {
+				await withPackages(project)
+				bump(project, USED)
+				await expectRun(project, [USED])
+				await expectRun(project, [])
+			},
+		},
+		{
+			name: 'a new version of a package no test loaded reruns nothing',
+			packages: true,
+			async run(project) {
+				await withPackages(project)
+				bump(project, UNUSED)
+				await expectRun(project, [])
+			},
+		},
+		{
+			name: 'a package.json change to its dependency fields alone reruns nothing',
+			packages: true,
+			async run(project) {
+				await withPackages(project)
+				const manifest = JSON.parse(project.read('package.json')) as object
+				project.change(
+					'package.json',
+					`${JSON.stringify({ ...manifest, dependencies: { [UNUSED]: '^1.1.0' } }, null, 2)}\n`,
+				)
+				await expectRun(project, [])
+			},
+		},
+		{
+			name: 'a new version of a package the config loaded reruns everything',
+			packages: true,
+			async run(project) {
+				const { withTool } = project.driver
+				if (!withTool) return
+				project.install(USED, '1.0.0')
+				for (const [file, content] of Object.entries(
+					withTool.call(project.driver, project.plugin, USED),
+				)) {
+					project.write(file, content)
+				}
+				project.commit('load a package from the config')
+				await first(project)
+				bump(project, USED)
+				await expectRun(project, ALL)
+				await expectRun(project, [])
+			},
+		},
+	]
 }
 
 export const scenarios: Scenario[] = [
@@ -97,15 +174,19 @@ export const scenarios: Scenario[] = [
 		},
 		ALL,
 	),
-	reruns(
-		'a lockfile change reruns everything',
-		(project) =>
-			project.change(
-				'package-lock.json',
-				`${project.read('package-lock.json')}\n`,
-			),
-		ALL,
-	),
+	{
+		...reruns(
+			'a lockfile change reruns everything',
+			(project) =>
+				project.change(
+					'package-lock.json',
+					`${project.read('package-lock.json')}\n`,
+				),
+			ALL,
+		),
+		packages: false,
+	},
+	...packageScenarios(),
 	reruns(
 		'a change to the workflow running the job reruns everything',
 		(project) =>
@@ -192,6 +273,11 @@ export function cases(driver: Driver): Case[] {
 	return modes.flatMap(({ label, cached }) =>
 		scenarios
 			.filter((scenario) => cached || !scenario.cacheOnly)
+			.filter(
+				(scenario) =>
+					scenario.packages === undefined ||
+					scenario.packages === (driver.tracksPackages === true),
+			)
 			.map((scenario) => ({
 				name: `${label}: ${scenario.name}`,
 				async run() {

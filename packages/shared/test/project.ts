@@ -29,6 +29,10 @@ export interface Driver {
 	source: string
 	/** The directory under the project that holds the plugin's record. */
 	cacheDir: string
+	/** Whether a lockfile change reruns only the tests that loaded a package whose version changed. */
+	tracksPackages?: true
+	/** A config file that also loads the package `tool`, as a plugin or a transformer would be. */
+	withTool?(plugin: string, tool: string): Record<string, string>
 	/** Config files of the sample; `plugin` is what they load the plugin by. */
 	config(plugin: string): Record<string, string>
 	/** `node` arguments of one run that writes the runner's JSON report to `report`. */
@@ -134,6 +138,8 @@ export class Project {
 	readonly cwd: string
 	readonly driver: Driver
 	readonly installed: boolean
+	/** What the sample's config loads the plugin by. */
+	readonly plugin: string
 	/** Extra environment of the next runs. */
 	env: Record<string, string> = {}
 	/** The job the runs claim to be: cache entries are kept per job. */
@@ -172,9 +178,9 @@ export class Project {
 				path.join(modules, driver.runner),
 			)
 		}
-		const plugin =
+		this.plugin =
 			file !== undefined ? `@useblacksmith/${driver.name}` : driver.source
-		for (const [name, content] of Object.entries(sample(driver, plugin))) {
+		for (const [name, content] of Object.entries(sample(driver, this.plugin))) {
 			this.write(name, content)
 		}
 		this.git('init', '-q', '-b', 'main')
@@ -197,6 +203,27 @@ export class Project {
 	write(file: string, content: string): void {
 		mkdirSync(path.dirname(path.join(this.cwd, file)), { recursive: true })
 		writeFileSync(path.join(this.cwd, file), content)
+	}
+
+	/** Installs `name` at `version`: a CommonJS package whose export returns its name. Not in git, as node_modules is not. */
+	install(name: string, version: string): void {
+		const dir = `node_modules/${name}`
+		this.write(`${dir}/package.json`, `${JSON.stringify({ name, version, main: 'index.js' })}\n`)
+		this.write(`${dir}/index.js`, `module.exports = () => ${JSON.stringify(name)}\n`)
+	}
+
+	/** A test file named `name` that loads the package `name`. */
+	packageTest(name: string): string {
+		const lines =
+			this.driver.style === 'esm'
+				? ["import assert from 'node:assert'", `import loaded from '${name}'`]
+				: ["const assert = require('node:assert')", `const loaded = require('${name}')`]
+		return [
+			...(this.driver.prelude === '' ? [] : [this.driver.prelude]),
+			...lines,
+			`it('${name}', () => assert.equal(loaded(), '${name}'))`,
+			'',
+		].join('\n')
 	}
 
 	read(file: string): string {

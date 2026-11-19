@@ -170,8 +170,8 @@ describe('failures and partial runs', () => {
 		assert.deepEqual(Repo.ran(repo.jest()), ['b'])
 	})
 
-	test('a lockfile change runs everything and drops the record of a file left out', () => {
-		repo.write('package-lock.json', '{}\n')
+	test('a package.json change outside its dependency fields runs everything and drops the record of a file left out', () => {
+		repo.write('package.json', '{ "name": "basic", "description": "edit" }\n')
 		assert.deepEqual(Repo.ran(repo.jest('test/a.test.js')), ['a'])
 		assert.deepEqual(Repo.ran(repo.jest()), ['b', 'c', 'child'])
 	})
