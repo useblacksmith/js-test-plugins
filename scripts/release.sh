@@ -92,7 +92,16 @@ if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
 fi
 
 # The workspace lockfile does not record a workspace package's own version.
-(cd "packages/$package" && npm version "$next" --no-git-tag-version >/dev/null)
+# Edited in place, not with `npm version`: under `pnpm run`, npm warns about
+# each pnpm setting it finds in its environment.
+node -e '
+	const fs = require("node:fs")
+	const [file, version] = process.argv.slice(1)
+	const text = fs.readFileSync(file, "utf8")
+	const next = text.replace(/("version":\s*")[^"]*"/, `$1${version}"`)
+	if (next === text) throw new Error(`no version field to set in ${file}`)
+	fs.writeFileSync(file, next)
+' "$manifest" "$next"
 tag="$package-v$next"
 git commit --quiet -m "release: $tag" -- "$manifest"
 git tag "$tag"
