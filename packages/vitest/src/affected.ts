@@ -1181,6 +1181,10 @@ export class SnapshotRecorder implements Reporter {
 	): Promise<void> {
 		await this.reportShadow(modules)
 		const store = dependencyStore(this.vitest)
+		const cut =
+			this.partial ||
+			this.vitest.getGlobalTestNamePattern() !== undefined ||
+			reason === 'interrupted'
 		if (store) {
 			// At the end of the run, not of the module: a worker finishes a
 			// file's record when it starts its next file or exits.
@@ -1190,8 +1194,6 @@ export class SnapshotRecorder implements Reporter {
 					this.ended.splice(0).map((module) => store.collect(module, root)),
 				)
 			}
-			const namePattern = this.vitest.getGlobalTestNamePattern() !== undefined
-			const cut = this.partial || namePattern || reason === 'interrupted'
 			await store.update(modules, (module) => cut || containsOnly(module))
 		}
 		await updatePackages(
@@ -1199,6 +1201,7 @@ export class SnapshotRecorder implements Reporter {
 			await repoRoot(this.vitest.config.root),
 			this.vitest.vite.config.cacheDir,
 			process.env[ENV_RECORD_ROOT],
+			cut || modules.some((module) => containsOnly(module)),
 		)
 		await this.reportFiltered()
 		// A failed run still vouches for the files that passed; the failed ones

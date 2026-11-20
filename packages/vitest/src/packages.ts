@@ -165,13 +165,14 @@ export function globalPackages(vitest: Vitest, repo: string): string[] {
 /**
  * Merges what the workers left under `recordRoot` for the test files of this
  * run into the record in `dir`. A test file two projects ran keeps the
- * packages of both; one that no longer exists is dropped.
+ * packages of both, and one run in part (`partial`) those it had; one that no longer exists is dropped.
  */
 export async function updatePackages(
 	vitest: Vitest,
 	repo: string,
 	dir: string,
 	recordRoot: string | undefined,
+	partial: boolean,
 ): Promise<void> {
 	const records = (await readPackages(dir)) ?? {
 		version: PACKAGES_VERSION,
@@ -205,10 +206,13 @@ export async function updatePackages(
 		await rm(file, { force: true })
 	}
 	// A run narrowed by `--project` saw a shared test file in some of its
-	// projects only: what the others loaded stays.
+	// projects only, and a partial one (`-t`, `.only`, a line filter) ran
+	// some of a file's tests only: what the rest loaded stays.
 	const narrowed = vitest.config.project.length > 0
 	for (const [test, dirs] of fresh) {
-		if (narrowed) for (const dir of records.files[test] ?? []) dirs.add(dir)
+		if (narrowed || partial) {
+			for (const dir of records.files[test] ?? []) dirs.add(dir)
+		}
 		records.files[test] = [...dirs].sort()
 	}
 	for (const test of Object.keys(records.files)) {
