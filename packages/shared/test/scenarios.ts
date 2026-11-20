@@ -227,7 +227,7 @@ export const scenarios: Scenario[] = [
 	reruns(
 		'a changed module reruns the test files that load it',
 		(project) =>
-			project.change('src/b.js', `${project.read('src/b.js')}// edit\n`),
+			project.change('src/b.js', `${project.read('src/b.js')}globalThis.edited = true\n`),
 		['a', 'b'],
 	),
 	reruns(
@@ -280,7 +280,7 @@ export const scenarios: Scenario[] = [
 		name: 'an uncommitted change reruns its test files',
 		async run(project) {
 			await first(project)
-			project.write('src/b.js', `${project.read('src/b.js')}// edit\n`)
+			project.write('src/b.js', `${project.read('src/b.js')}globalThis.edited = true\n`)
 			await expectRun(project, ['a', 'b'])
 		},
 	},
@@ -317,7 +317,7 @@ export const scenarios: Scenario[] = [
 		cacheOnly: true,
 		async run(project) {
 			await first(project)
-			project.change('src/b.js', `${project.read('src/b.js')}// edit\n`)
+			project.change('src/b.js', `${project.read('src/b.js')}globalThis.edited = true\n`)
 			project.env.ACTIONS_CACHE_MODE = 'read'
 			for (const _ of [1, 2]) {
 				const run = await expectRun(project, ['a', 'b'])
