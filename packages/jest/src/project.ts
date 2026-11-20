@@ -34,7 +34,7 @@ import { dataDir, log, suffix, type Shard, type State } from './state.ts'
 
 const USER_AGENT = '@useblacksmith/jest'
 const BUNDLE_VERSION = 'blacksmith-jest-bundle-1'
-const TRAVELS = /^(records|anchor)(\.\d+of\d+)?\.json$/
+const TRAVELS = /^(records|anchor|units)(\.\d+of\d+)?\.json$/
 
 /** Files that shape every test without any of them reading it: a change runs everything. */
 const ALWAYS = [

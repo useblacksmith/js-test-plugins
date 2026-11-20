@@ -57,6 +57,8 @@ export interface Piece {
 	probes: string[]
 	/** package.json files the test read itself: compared in full, dependency fields included. */
 	manifests: string[]
+	/** Repository-relative module → the functions the test file entered in it; absent when no module was marked. */
+	ran?: Record<string, string[]>
 }
 
 /**
@@ -184,6 +186,8 @@ function childEnvironment(env: NodeJS.ProcessEnv, dir: string): void {
 	env[CHILD_RECORD_ENV] = dir
 }
 
+let begun = 0
+
 /**
  * Starts the record of the test file `test`. `sandboxEnv` is the copy of the
  * environment Jest gave the test, which a test passing `env` to a child reads.
@@ -199,7 +203,8 @@ export function begin(
 	const childDir = path.join(
 		dir,
 		'children',
-		`${name}-${process.pid}-${threadId}`,
+		// Several projects may run one test file in the same process.
+		`${name}-${process.pid}-${threadId}-${begun++}`,
 	)
 	try {
 		raw.mkdirSync(childDir, { recursive: true })
@@ -216,8 +221,11 @@ export function begin(
 	}
 }
 
-/** Ends the record of the running test file and writes it; `modules` are the files Jest read as its modules. */
-export function end(modules: Iterable<string>): void {
+/** Ends the record of the running test file and writes it; `modules` are the files Jest read as its modules, `hits` what its marked modules reported. */
+export function end(
+	modules: Iterable<string>,
+	hits?: Record<string, Record<string, unknown>>,
+): void {
 	const dir = root()
 	const done = current
 	current = null
@@ -249,6 +257,11 @@ export function end(modules: Iterable<string>): void {
 		deps: [...done.deps],
 		probes: [...done.probes].filter((file) => !done.deps.has(file)),
 		manifests: [...done.manifests],
+	}
+	if (hits) {
+		piece.ran = Object.fromEntries(
+			Object.entries(hits).map(([module, entered]) => [module, Object.keys(entered)]),
+		)
 	}
 	try {
 		raw.mkdirSync(path.join(dir, 'tests'), { recursive: true })

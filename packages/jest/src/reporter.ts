@@ -23,6 +23,7 @@ import {
 	writeRecords,
 } from './project.ts'
 import { isPackagePath, PackageLinks } from '../../shared/src/packages.ts'
+import { dropUnits, updateUnits } from './narrow.ts'
 import { endGlobals, type Piece } from './record.ts'
 import { ENV_RECORD, log, state } from './state.ts'
 
@@ -87,7 +88,7 @@ export default class BlacksmithReporter {
 		const pending = ctx.pending
 		ctx.pending = null
 		if (!pending || !root) return
-		const { deps, global, manifests } = readPieces(root, ctx.repo)
+		const { deps, global, manifests, ran } = readPieces(root, ctx.repo)
 		const links = new PackageLinks(ctx.repo)
 		const run: RunRecord = {
 			at: Date.now(),
@@ -142,6 +143,7 @@ export default class BlacksmithReporter {
 			run,
 			pending.changed,
 			ctx.options,
+			pending.affects,
 		)
 		for (const spec of Object.keys(merged.files)) {
 			if (!existsSync(path.join(ctx.repo, spec))) delete merged.files[spec]
@@ -149,6 +151,16 @@ export default class BlacksmithReporter {
 		merged.global = merged.global.filter(
 			(file) => !isPackagePath(file) || existsSync(path.join(ctx.repo, file)),
 		)
+		if (ctx.narrow) {
+			updateUnits(
+				ctx,
+				pending.shard,
+				stored,
+				merged,
+				new Map([...this.results.keys()].map((file) => [file, ran.get(file)])),
+				this.partial,
+			)
+		} else dropUnits(ctx, pending.shard)
 		const anchored = await writeRecords(ctx, pending.shard, merged)
 		const entries = Object.values(merged.files)
 		const vouched = entries.filter(
@@ -174,7 +186,9 @@ function readPieces(
 	deps: Map<string, Set<string>>
 	global: string[]
 	manifests: Map<string, Set<string>>
+	ran: Map<string, Record<string, string[]>>
 } {
+	const ran = new Map<string, Record<string, string[]>>()
 	const manifests = new Map<string, Set<string>>()
 	const deps = new Map<string, Set<string>>()
 	const global = new Set<string>()
@@ -196,6 +210,14 @@ function readPieces(
 		const read = manifests.get(test) ?? new Set<string>()
 		manifests.set(test, read)
 		for (const file of piece.manifests ?? []) read.add(toRelative(repo, file))
+		if (piece.ran) {
+			// A test file several projects run entered what any of them did.
+			const all = ran.get(test) ?? {}
+			ran.set(test, all)
+			for (const [module, names] of Object.entries(piece.ran)) {
+				all[module] = [...new Set([...(all[module] ?? []), ...names])].sort()
+			}
+		}
 		// Jest's resolver asks about every directory on the way to a module:
 		// a file moving into one of them is no change to the test.
 		const probes = piece.probes.filter((file) => !isDirectory(file))
@@ -216,5 +238,5 @@ function readPieces(
 			if (line !== '') global.add(toRelative(repo, line))
 		}
 	}
-	return { deps, global: [...global].sort(), manifests }
+	return { deps, global: [...global].sort(), manifests, ran }
 }

@@ -524,7 +524,18 @@ export function analyze(code: string, file: string): Analysis | null {
 	}
 }
 
-/** `code` with every top-level function reporting to `HITS[key]` when it is entered. */
-export function footer(key: string): string {
-	return `\n;function ${HIT}(n){(${HIT}.t??=((globalThis.${HITS}??={})[${JSON.stringify(key)}]??={}))[n]=1}${HIT}(${JSON.stringify(LOADED)});`
+/**
+ * What a marked module ends with: every top-level function reports to
+ * `HITS[key]` when it is entered. `typed` is the same in a form a strict
+ * TypeScript check accepts, for a transformer that type-checks what it is given.
+ */
+export function footer(key: string, typed = false): string {
+	const loaded = `${HIT}(${JSON.stringify(LOADED)});`
+	if (!typed) {
+		return `\n;function ${HIT}(n){(${HIT}.t??=((globalThis.${HITS}??={})[${JSON.stringify(key)}]??={}))[n]=1}${loaded}`
+	}
+	// The table is looked up on first use: a hoisted function may run before this line does.
+	const table = `${HIT}_t`
+	// Two semicolons: a transformer may take the first as the end of the statement before and write after it.
+	return `\n;;var ${table}=Function("return")();function ${HIT}(n=""){(${table}??=((Function("return this")().${HITS}??={})[${JSON.stringify(key)}]??={}))[n]=1}${loaded}`
 }

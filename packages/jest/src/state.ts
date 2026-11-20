@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 
-import type { Decision, Options } from './core.ts'
+import type { Affects, Decision, Options } from './core.ts'
 
 /** Overrides where the record and anchor are kept. */
 export const ENV_DIR = 'BLACKSMITH_JEST_DIR'
@@ -10,6 +10,9 @@ export const ENV_DIR = 'BLACKSMITH_JEST_DIR'
 export const ENV_RECORD = 'BLACKSMITH_JEST_RECORD'
 /** The `jest-runtime` the project's Jest runs tests with, which the recording runtime extends. */
 export const ENV_RUNTIME = 'BLACKSMITH_JEST_RUNTIME'
+
+/** Set when the modules of the repository are to report the functions a test file enters. */
+export const ENV_NARROW = 'BLACKSMITH_JEST_NARROW'
 
 export interface Shard {
 	index: number
@@ -34,6 +37,8 @@ export interface Pending {
 	owned: string[]
 	changed: string[]
 	selection: Record<string, Decision>
+	/** Whether a changed file a test file loaded changed anything for it; absent when changes are not looked into. */
+	affects?: Affects | undefined
 }
 
 /** Shared by the config helper, the sequencer and the reporter, which Jest loads into its main process one by one. */
@@ -46,7 +51,15 @@ export interface State {
 	coverage: boolean
 	shard: Shard | null
 	pending: Pending | null
+	/** Whether the run looks into changed files. */
+	narrow: boolean
+	/** Resolves a specifier from a file the way one of the run's projects does. */
+	resolve: Resolve
+	/** Whether every project resolves modules the same way: `resolve` answers for one of them. */
+	oneResolver: boolean
 }
+
+export type Resolve = (from: string, specifier: string) => string | null
 
 const KEY = Symbol.for('blacksmith.jest.state')
 const holder = globalThis as { [KEY]?: State }
@@ -72,6 +85,9 @@ export function state(): State {
 		coverage: false,
 		shard: null,
 		pending: null,
+		narrow: false,
+		resolve: () => null,
+		oneResolver: true,
 	})
 }
 
