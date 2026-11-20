@@ -1,6 +1,6 @@
 {
 	"name": "@useblacksmith/jest",
-	"version": "0.1.0-rc1",
+	"version": "0.1.0-rc2",
 	"description": "Runs only the Jest test files affected since the last run, with Blacksmith-backed caching",
 	"type": "module",
 	"license": "MIT",
