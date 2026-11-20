@@ -275,11 +275,14 @@ export function analyze(code: string, file: string): Analysis | null {
 			return
 		}
 		let at = body.start + 1
+		let separator = ''
 		for (const statement of body.body as Node[]) {
 			if (statement.type !== 'ExpressionStatement' || !statement.directive) break
 			at = statement.end
+			// A directive may end without a semicolon.
+			separator = ';'
 		}
-		marks.push([at, `${call};`])
+		marks.push([at, `${separator}${call};`])
 	}
 
 	const unit = (name: string, node: Node, value: Node | null, prefix: string): void => {
