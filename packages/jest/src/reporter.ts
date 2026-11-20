@@ -22,7 +22,7 @@ import {
 	toRelative,
 	writeRecords,
 } from './project.ts'
-import { isPackagePath } from '../../shared/src/packages.ts'
+import { isPackagePath, PackageLinks } from '../../shared/src/packages.ts'
 import { endGlobals, type Piece } from './record.ts'
 import { ENV_RECORD, log, state } from './state.ts'
 
@@ -88,9 +88,10 @@ export default class BlacksmithReporter {
 		ctx.pending = null
 		if (!pending || !root) return
 		const { deps, global, manifests } = readPieces(root, ctx.repo)
+		const links = new PackageLinks(ctx.repo)
 		const run: RunRecord = {
 			at: Date.now(),
-			global,
+			global: links.expand(global),
 			files: {},
 			partial: this.partial,
 		}
@@ -113,7 +114,10 @@ export default class BlacksmithReporter {
 					else if (!this.partial) tests[test.fullName] ??= 'skipped'
 				}
 			}
-			const entry: FileRecord = { deps: [...(recorded ?? [])].sort(), tests }
+			const entry: FileRecord = {
+				deps: links.expand(recorded ?? [], [file]),
+				tests,
+			}
 			const read = [...(manifests.get(file) ?? [])].sort()
 			if (read.length > 0) entry.manifests = read
 			if (failed) entry.failed = true

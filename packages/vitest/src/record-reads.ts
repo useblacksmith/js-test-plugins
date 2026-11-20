@@ -21,7 +21,7 @@ import {
 	workerRecordPath,
 	wrapFs,
 } from '../../shared/src/fs-recorder.ts'
-import { packageOf } from '../../shared/src/packages.ts'
+import { isPackagePath, packageOf } from '../../shared/src/packages.ts'
 
 /**
  * Runs as the first setup file of every test file. Vitest records what a
@@ -579,7 +579,10 @@ const pendingPackages = ((
 )[PENDING_PACKAGES] ??= {})
 
 /** The installed packages reached from `roots`: through Vitest's graph to the first of a chain, through Node's loads from there. */
-function loadedPackages(pending: PendingPackages): string[] {
+function loadedPackages(pending: PendingPackages): {
+	packages: string[]
+	dirs: string[]
+} {
 	const repo = process.env[ENV_REPO]
 	const found = new Set<string>(pending.read)
 	const queue: string[] = []
@@ -587,14 +590,17 @@ function loadedPackages(pending: PendingPackages): string[] {
 		queue.push(packageOf(repo, file) ?? file)
 	}
 	const seen = new Set<string>()
+	// Where the files that loaded them are: pnpm's links to a package are looked up from there.
+	const importers = new Set<string>()
 	while (queue.length > 0) {
 		const from = queue.pop()
 		if (from === undefined || seen.has(from)) continue
 		seen.add(from)
 		if (packageOf(repo, path.join(from, 'package.json')) === from) found.add(from)
+		else if (!isPackagePath(from)) importers.add(path.dirname(from))
 		for (const to of packages.edges.get(from) ?? []) queue.push(to)
 	}
-	return [...found].sort()
+	return { packages: [...found].sort(), dirs: [...importers].sort() }
 }
 
 function writePendingPackages(): void {
@@ -608,7 +614,7 @@ function writePendingPackages(): void {
 			JSON.stringify({
 				test: last.test,
 				project: last.project,
-				packages: loadedPackages(last),
+				...loadedPackages(last),
 				// Without synchronous hooks an ES module's loads go unseen.
 				incomplete: !('registerHooks' in require('node:module')),
 			}),

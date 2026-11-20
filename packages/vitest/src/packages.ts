@@ -5,7 +5,7 @@ import path from 'node:path'
 import type { Vitest } from 'vitest/node'
 
 import { PACKAGES_SUFFIX } from '../../shared/src/fs-recorder.ts'
-import { packageDir } from '../../shared/src/packages.ts'
+import { PackageLinks, packageDir } from '../../shared/src/packages.ts'
 
 /**
  * The installed packages each test file loaded. Vitest's own record ends at
@@ -206,6 +206,8 @@ export async function updatePackages(
 		global: [],
 	}
 	const fresh = new Map<string, Set<string>>()
+	const importers = new Map<string, Set<string>>()
+	const links = new PackageLinks(repo)
 	const unseen = new Set<string>()
 	for (const file of bundled) {
 		const test = relative(repo, file)
@@ -223,6 +225,7 @@ export async function updatePackages(
 			const piece = JSON.parse(await readFile(file, 'utf8')) as {
 				test: string
 				packages: string[]
+				dirs?: string[]
 				incomplete?: boolean
 			}
 			const test = relative(repo, piece.test)
@@ -233,6 +236,12 @@ export async function updatePackages(
 				for (const loaded of piece.packages) {
 					const inRepo = relative(repo, loaded)
 					if (inRepo !== null) dirs.add(inRepo)
+				}
+				let from = importers.get(test)
+				if (!from) importers.set(test, (from = new Set([test])))
+				for (const importer of piece.dirs ?? []) {
+					const inRepo = relative(repo, importer)
+					if (inRepo !== null) from.add(`${inRepo}/.`)
 				}
 			}
 		} catch {}
@@ -246,7 +255,8 @@ export async function updatePackages(
 		if (narrowed || partial) {
 			for (const dir of records.files[test] ?? []) dirs.add(dir)
 		}
-		records.files[test] = [...dirs].sort()
+		// pnpm: a test also depends on the links that led to its packages.
+		records.files[test] = links.expand(dirs, importers.get(test))
 	}
 	for (const test of Object.keys(records.files)) {
 		if (!existsSync(path.join(repo, test))) delete records.files[test]
@@ -269,7 +279,12 @@ export async function updatePackages(
 			if (existsSync(path.join(repo, dir))) global.add(dir)
 		}
 	}
-	records.global = [...global].sort()
+	const roots: string[] = []
+	for (const project of [vitest.getRootProject(), ...vitest.projects]) {
+		const root = relative(repo, project.config.root)
+		if (root !== null) roots.push(`${root}/.`)
+	}
+	records.global = links.expand(global, roots)
 	await mkdir(dir, { recursive: true })
 	const file = path.join(dir, PACKAGES_FILE)
 	const tmp = `${file}.${process.pid}.${Date.now()}.tmp`

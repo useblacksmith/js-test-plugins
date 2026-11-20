@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import {
 	isPackagePath,
+	PackageLinks,
 	manifestShape,
 	packageVersion,
 } from '../../shared/src/packages.ts'
@@ -347,6 +348,20 @@ async function commit(ctx: Context, runFiles: string[]): Promise<void> {
 	const runs = (runFiles.length > 0 ? runFiles : [defaultRun])
 		.map((file) => readJson<RunRecord>(file))
 		.filter((run) => run !== null)
+	// pnpm: a test also depends on the links that led to its packages.
+	const links = new PackageLinks(ctx.repo)
+	for (const run of runs) {
+		run.global = links.expand(run.global)
+		for (const [from, to] of Object.entries(run.graph)) {
+			run.graph[from] = links.expand(to, [from])
+		}
+		for (const [spec, record] of Object.entries(run.files)) {
+			record.hooks = links.expand(record.hooks, [spec])
+			for (const test of Object.values(record.tests)) {
+				test.deps = links.expand(test.deps, [spec])
+			}
+		}
+	}
 	const recordsFile = path.join(ctx.dir, `records${suffix(pending.shard)}.json`)
 	// A changed lockfile or config is in no test's dependencies, yet stales every
 	// record: a test this run left out (`--grep`, `--bail`) keeps none.
