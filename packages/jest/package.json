@@ -33,6 +33,7 @@
 		"jest": ">=29.0.0"
 	},
 	"dependencies": {
+		"oxc-parser": "0.159.0",
 		"picomatch": "4.0.7"
 	},
 	"devDependencies": {

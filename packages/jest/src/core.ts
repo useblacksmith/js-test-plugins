@@ -39,7 +39,15 @@ export interface Records {
 	files: Record<string, FileRecord>
 }
 
+/** Whether the change to `file`, which the test file `spec` loaded, can alter what `spec` does. */
+export type Affects = (spec: string, file: string) => boolean
+
 export interface Options {
+	/**
+	 * Experimental. Look inside a changed file instead of rerunning every test
+	 * file that loaded it.
+	 */
+	narrow?: boolean
 	/** Test file glob → globs of files those test files depend on that nothing reads. */
 	dependencies?: Record<string, string | string[]>
 }
@@ -64,6 +72,7 @@ function changedDependency(
 	spec: string,
 	changed: string[],
 	options: Options,
+	affects: Affects | undefined,
 ): string | undefined {
 	const deps = new Set([
 		spec,
@@ -77,7 +86,12 @@ function changedDependency(
 	}
 	const matches =
 		globs.length > 0 ? picomatch(globs, { dot: true }) : () => false
-	return changed.find((file) => deps.has(file) || matches(file))
+	const global = new Set(records.global)
+	return changed.find((file) => {
+		if (matches(file)) return true
+		if (!deps.has(file)) return false
+		return file === spec || global.has(file) || !affects || affects(spec, file)
+	})
 }
 
 /**
@@ -90,6 +104,7 @@ export function select(
 	specs: string[],
 	changed: string[],
 	options: Options = {},
+	affects?: Affects,
 ): Record<string, Decision> {
 	const result: Record<string, Decision> = {}
 	for (const spec of specs) {
@@ -98,7 +113,7 @@ export function select(
 			result[spec] = { run: true, reason: 'no record' }
 			continue
 		}
-		const hit = changedDependency(records, spec, changed, options)
+		const hit = changedDependency(records, spec, changed, options, affects)
 		if (hit !== undefined)
 			result[spec] = { run: true, reason: `changed: ${hit}` }
 		else if (entry.failed || Object.values(entry.tests).includes('failed'))
@@ -129,12 +144,13 @@ export function mergeRecords(
 	run: RunRecord,
 	changed: string[],
 	options: Options = {},
+	affects?: Affects,
 ): Records {
 	const out =
 		stored?.version === RECORDS_VERSION
 			? structuredClone(stored)
 			: emptyRecords()
-	const verdict = select(out, Object.keys(out.files), changed, options)
+	const verdict = select(out, Object.keys(out.files), changed, options, affects)
 	for (const [spec, decision] of Object.entries(verdict)) {
 		if (decision.run && decision.reason.startsWith('changed')) {
 			delete out.files[spec]

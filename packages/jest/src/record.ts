@@ -57,6 +57,8 @@ export interface Piece {
 	probes: string[]
 	/** package.json files the test read itself: compared in full, dependency fields included. */
 	manifests: string[]
+	/** Repository-relative module → the functions the test file entered in it; absent when no module was marked. */
+	ran?: Record<string, string[]>
 }
 
 /**
@@ -216,8 +218,11 @@ export function begin(
 	}
 }
 
-/** Ends the record of the running test file and writes it; `modules` are the files Jest read as its modules. */
-export function end(modules: Iterable<string>): void {
+/** Ends the record of the running test file and writes it; `modules` are the files Jest read as its modules, `hits` what its marked modules reported. */
+export function end(
+	modules: Iterable<string>,
+	hits?: Record<string, Record<string, unknown>>,
+): void {
 	const dir = root()
 	const done = current
 	current = null
@@ -249,6 +254,11 @@ export function end(modules: Iterable<string>): void {
 		deps: [...done.deps],
 		probes: [...done.probes].filter((file) => !done.deps.has(file)),
 		manifests: [...done.manifests],
+	}
+	if (hits) {
+		piece.ran = Object.fromEntries(
+			Object.entries(hits).map(([module, entered]) => [module, Object.keys(entered)]),
+		)
 	}
 	try {
 		raw.mkdirSync(path.join(dir, 'tests'), { recursive: true })

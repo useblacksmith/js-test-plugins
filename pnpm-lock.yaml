@@ -10,6 +10,12 @@ importers:
 
   packages/jest:
     dependencies:
+      magic-string:
+        specifier: 1.4.5
+        version: 1.4.5
+      oxc-parser:
+        specifier: 0.159.0
+        version: 0.159.0
       picomatch:
         specifier: 4.0.7
         version: 4.0.7

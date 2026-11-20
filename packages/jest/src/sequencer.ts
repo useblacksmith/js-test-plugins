@@ -7,6 +7,7 @@ import {
 	readManifests,
 	recordedPaths,
 	select,
+	type Affects,
 	type Decision,
 	type Records,
 } from './core.ts'
@@ -20,6 +21,7 @@ import {
 	toRelative,
 	type Anchor,
 } from './project.ts'
+import { affecting } from './narrow.ts'
 import { recordGlobals } from './record.ts'
 import { log, resolveFromJest, state, type Pending } from './state.ts'
 
@@ -31,6 +33,9 @@ import { log, resolveFromJest, state, type Pending } from './state.ts'
  */
 interface Test {
 	path: string
+	context?: {
+		resolver?: { resolveModule?: (from: string, specifier: string) => string }
+	}
 }
 
 interface SequencerClass {
@@ -82,6 +87,18 @@ export default class BlacksmithSequencer extends Base {
 			process.argv.some((arg) => arg === '--watch' || arg === '--watchAll')
 		if (watching) return super.sort(tests)
 		let selected = tests
+		const resolvers = new Set(
+			tests.flatMap((test) => test.context?.resolver ?? []),
+		)
+		ctx.resolve = (from, specifier) => {
+			for (const resolver of resolvers) {
+				try {
+					const file = resolver.resolveModule?.(from, specifier)
+					if (file) return file
+				} catch {}
+			}
+			return null
+		}
 		try {
 			const pending = await affected(
 				tests.map((test) => toRelative(ctx.repo, test.path)),
@@ -120,6 +137,7 @@ async function affected(owned: string[], coverage: boolean): Promise<Pending> {
 		Object.fromEntries(owned.map((spec) => [spec, { run: true, reason }]))
 	let changed: string[] = []
 	let selection: Record<string, Decision>
+	let affects: Affects | undefined
 	if (records?.version !== RECORDS_VERSION || !anchor?.tree) {
 		selection = everything('no record')
 	} else {
@@ -139,9 +157,12 @@ async function affected(owned: string[], coverage: boolean): Promise<Pending> {
 			// Coverage of a part of the test files would fail or pass thresholds for the wrong reason.
 			log('coverage is on: running every test file')
 			selection = everything('coverage')
-		} else selection = select(records, owned, changed, ctx.options)
+		} else {
+			if (ctx.narrow) affects = affecting(ctx, shard, records, changed)
+			selection = select(records, owned, changed, ctx.options, affects)
+		}
 	}
-	return { shard, owned, changed, selection }
+	return { shard, owned, changed, selection, affects }
 }
 
 function describe(pending: Pending): void {

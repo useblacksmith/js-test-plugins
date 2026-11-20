@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { ENV_REPO } from '../../shared/src/fs-recorder.ts'
 import type { Options } from './core.ts'
 import {
+	ENV_NARROW,
 	ENV_RECORD,
 	ENV_RUNTIME,
 	dataDir,
@@ -55,6 +56,10 @@ function apply(config: JestConfig, options: Options): JestConfig {
 		process.argv.some(
 			(arg) => arg === '--coverage' || arg === '--collectCoverage',
 		)
+	// Coverage runs every test file, and counts the marks as code.
+	ctx.narrow = options.narrow === true && !ctx.coverage
+	if (ctx.narrow) process.env[ENV_NARROW] = '1'
+	else delete process.env[ENV_NARROW]
 	process.env[ENV_REPO] = ctx.repo
 	process.env[ENV_RUNTIME] = resolveFromJest(ctx.cwd, 'jest-runtime')
 	if (process.env[ENV_RECORD] === undefined) {
