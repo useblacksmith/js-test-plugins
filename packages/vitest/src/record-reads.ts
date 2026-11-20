@@ -215,7 +215,9 @@ function resolvedPackage(parentURL: string | undefined, url: string): void {
 		if (
 			prefix !== '' &&
 			url.startsWith(prefix) &&
-			url.indexOf('node_modules', prefix.length) === -1
+			url.indexOf('node_modules', prefix.length) === -1 &&
+			// An escaped URL may hide a package nested in this one.
+			url.indexOf('%', prefix.length) === -1
 		) {
 			return
 		}
