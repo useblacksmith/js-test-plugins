@@ -13,6 +13,14 @@ import {
 import { analyze, footer } from '../../shared/src/units.ts'
 
 export const UNITS_FILE = 'blacksmith-units.json'
+
+/** The function record kept for one anchor: digests are only as current as the anchor they are compared under. */
+export function unitsFile(snapshotFile: string): string {
+	return path.join(
+		path.dirname(snapshotFile),
+		path.basename(snapshotFile).replace(/^blacksmith/, 'blacksmith-units'),
+	)
+}
 const UNITS_VERSION = 1
 
 interface UnitRecords {
@@ -149,10 +157,10 @@ async function refreshDigests(repo: string, records: UnitRecords): Promise<void>
 	)
 }
 
-async function readUnits(dir: string): Promise<UnitRecords | null> {
+async function readUnits(file: string): Promise<UnitRecords | null> {
 	try {
 		const records = JSON.parse(
-			await readFile(path.join(dir, UNITS_FILE), 'utf8'),
+			await readFile(file, 'utf8'),
 		) as UnitRecords
 		return records.version === UNITS_VERSION ? records : null
 	} catch {
@@ -161,7 +169,7 @@ async function readUnits(dir: string): Promise<UnitRecords | null> {
 }
 
 /**
- * Folds what the workers left under `recordRoot` into the record in `dir`.
+ * Folds what the workers left under `recordRoot` into the record at `units`.
  * A `partial` run entered only what some of a file's tests enter, so what the
  * others entered before stays; a file without an earlier record gets none,
  * and reruns on any change to what it loaded.
@@ -169,11 +177,11 @@ async function readUnits(dir: string): Promise<UnitRecords | null> {
 export async function updateUnits(
 	vitest: Vitest,
 	repo: string,
-	dir: string,
+	units: string,
 	recordRoot: string | undefined,
 	partial: boolean,
 ): Promise<void> {
-	const records = (await readUnits(dir)) ?? {
+	const records = (await readUnits(units)) ?? {
 		version: UNITS_VERSION,
 		modules: {},
 		tests: {},
@@ -219,20 +227,17 @@ export async function updateUnits(
 			Object.entries(ran).map(([module, entered]) => [module, [...entered].sort()]),
 		)
 	}
-	// A run that left tests out vouches for no file: the next run still has
-	// to compare what the tests left out last ran against.
-	if (!narrowed && !partial) {
-		for (const [module, digest] of digests) records.modules[module] = digest
-		await refreshDigests(repo, records)
-	}
 	for (const test of Object.keys(records.tests)) {
 		if (!existsSync(path.join(repo, test))) delete records.tests[test]
 	}
 	for (const module of Object.keys(records.modules)) {
 		if (!existsSync(path.join(repo, module))) delete records.modules[module]
 	}
-	await mkdir(dir, { recursive: true })
-	const file = path.join(dir, UNITS_FILE)
+	await writeUnitsFile(units, records)
+}
+
+async function writeUnitsFile(file: string, records: UnitRecords): Promise<void> {
+	await mkdir(path.dirname(file), { recursive: true })
 	const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
 	await writeFile(tmp, JSON.stringify(records))
 	await rename(tmp, file)
@@ -244,10 +249,10 @@ export async function updateUnits(
  */
 export async function narrowing(
 	repo: string,
-	dir: string,
+	units: string,
 	changed: Iterable<string>,
 ): Promise<((test: string, deps: ReadonlySet<string>, changed: readonly string[]) => boolean) | null> {
-	const records = await readUnits(dir)
+	const records = await readUnits(units)
 	if (!records) return null
 	const current = new Map<string, ResolvedDigest | null>()
 	for (const file of changed) {
@@ -293,4 +298,17 @@ export async function narrowing(
 			return module === null || narrowing.affects(module, recorded)
 		})
 	}
+}
+
+/**
+ * Moves the recorded digests on to the files as they are now. Only a run
+ * that writes its anchor does: the anchor is what says a file changed, and a
+ * digest ahead of it would hide the change from the tests the run left out.
+ */
+export async function advanceDigests(repo: string, file: string): Promise<void> {
+	const records = await readUnits(file)
+	if (!records) return
+	for (const [module, digest] of digests) records.modules[module] = digest
+	await refreshDigests(repo, records)
+	await writeUnitsFile(file, records)
 }

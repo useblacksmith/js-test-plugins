@@ -44,7 +44,7 @@ import {
 } from '../../shared/src/git.js'
 import { shardOwner } from './sequencer.js'
 import { readPackages, updatePackages } from './packages.js'
-import { narrowing, updateUnits } from './units.js'
+import { advanceDigests, narrowing, unitsFile, updateUnits } from './units.js'
 import {
 	isPackagePath,
 	manifestShape,
@@ -635,7 +635,11 @@ export class TreeSnapshotProvider {
 			this.deselected.add(test)
 		}
 		const needs = this.narrow
-			? await narrowing(await repoRoot(options.root), cacheDir, selected)
+			? await narrowing(
+					await repoRoot(options.root),
+					unitsFile(snapshotPath(this.vitest, cacheDir)),
+					selected,
+				)
 			: null
 		if (own || needs) {
 			const recorded = await recordedDependencies(this.vitest, cacheDir)
@@ -1244,7 +1248,7 @@ export class SnapshotRecorder implements Reporter {
 			await updateUnits(
 				this.vitest,
 				await repoRoot(this.vitest.config.root),
-				this.vitest.vite.config.cacheDir,
+				unitsFile(snapshotPath(this.vitest, this.vitest.vite.config.cacheDir)),
 				process.env[ENV_RECORD_ROOT],
 				cut || modules.some((module) => containsOnly(module)),
 			)
@@ -1326,6 +1330,7 @@ export class SnapshotRecorder implements Reporter {
 		const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
 		await writeFile(tmp, JSON.stringify(snapshot))
 		await rename(tmp, file)
+		if (this.provider.narrow) await advanceDigests(repo, unitsFile(file))
 		await this.publish(snapshot)
 	}
 

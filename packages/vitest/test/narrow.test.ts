@@ -151,6 +151,13 @@ describe('narrow: which test files a change inside a file reruns', () => {
 		}
 	})
 
+	test('a run of some test files leaves the change pending for the others', async () => {
+		const repo = await recorded('filtered')
+		repo.edit('src/helper.ts', 'return n', 'return n + 0')
+		await repo.run('src/arrow.test.ts')
+		expect(await repo.run()).toEqual(['called', 'renamed'])
+	})
+
 	test('a parameter list counts as a value: it runs even when the body is never entered', async () => {
 		const repo = await recorded('signature')
 		repo.edit('src/helper.ts', 'spare()', 'spare(n = 1)')
