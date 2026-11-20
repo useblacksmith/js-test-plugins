@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import {
 	isPackagePath,
 	packageOf,
+	readDuringLoad,
 	repositoryPackage,
 } from '../../shared/src/packages.ts'
 import { createRequire } from 'node:module'
@@ -59,19 +60,18 @@ export interface Piece {
 }
 
 /**
- * Whether the read under way was made by a file of the repository: the frame
- * nearest to the call decides. Jest's resolver, Babel and browserslist read
- * the package.json files above every module, for fields of their own.
+ * Whether the read under way was made by code a test called, through a helper
+ * package or not. Jest's resolver, Babel and browserslist read the
+ * package.json files above every module while it loads, for fields of their own.
  */
 function readByTest(): boolean {
-	const lines = (new Error().stack ?? '').split('\n').slice(1)
-	const frame = lines.find(
+	return !readDuringLoad(
 		(line) =>
-			!line.includes('node:') &&
-			!line.includes(`${path.sep}shared${path.sep}src${path.sep}fs-recorder.`) &&
-			!line.includes(here),
+			line.includes(`${path.sep}shared${path.sep}src${path.sep}fs-recorder.`) ||
+			line.includes(`${path.sep}shared${path.sep}src${path.sep}packages.`) ||
+			line.includes(here),
+		(line) => /[\\/](jest-(runtime|resolve|haste-map)|@jest[\\/]transform)[\\/]/.test(line),
 	)
-	return frame !== undefined && !isPackagePath(frame)
 }
 
 interface Current {

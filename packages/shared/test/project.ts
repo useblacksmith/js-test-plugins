@@ -249,6 +249,26 @@ export class Project {
 		)
 	}
 
+	/** A test file named `name` that reads `file` through the installed package `helper`, at once and from a callback. */
+	helperReadingTest(name: string, helper: string, file: string): string {
+		this.write(`node_modules/${helper}/package.json`, `${JSON.stringify({ name: helper, version: '1.0.0', main: 'index.js' })}\n`)
+		this.write(
+			`node_modules/${helper}/index.js`,
+			"const fs = require('node:fs')\nexports.sync = (file) => fs.readFileSync(file, 'utf8')\nexports.later = (file, done) => setImmediate(() => fs.readFile(file, 'utf8', done))\n",
+		)
+		const esm = this.driver.style === 'esm'
+		return [
+			...(this.driver.prelude === '' ? [] : [this.driver.prelude]),
+			esm ? "import assert from 'node:assert'" : "const assert = require('node:assert')",
+			esm ? `import helper from '${helper}'` : `const helper = require('${helper}')`,
+			`it('${name}', () => new Promise((resolve, reject) => {`,
+			`	assert.ok(helper.sync(${JSON.stringify(file)}).length > 0)`,
+			`	helper.later(${JSON.stringify(file)}, (error) => (error ? reject(error) : resolve()))`,
+			'}))',
+			'',
+		].join('\n')
+	}
+
 	/** A test file named `name` that loads the package `pkg` in a node child process. */
 	spawningTest(name: string, pkg: string): string {
 		return this.testFile(
