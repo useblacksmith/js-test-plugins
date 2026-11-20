@@ -23,8 +23,8 @@ export {
  * Keeps the dependency record and tree anchor in the Actions cache from
  * inside the run, so a job needs no restore/save steps. Speaks the cache
  * service's twirp API at ACTIONS_RESULTS_URL; on a Blacksmith runner a plain
- * step can reach it with no token because the VM proxy adds one, elsewhere
- * the variable is absent and nothing happens. Every failure here is logged
+ * step can reach it with no token, elsewhere the variable is absent and
+ * nothing happens. Every failure here is logged
  * once and never changes the run.
  */
 

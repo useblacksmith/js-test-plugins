@@ -5,8 +5,8 @@ import { gunzipSync, gzipSync } from 'node:zlib'
 /**
  * The Actions cache service's twirp API at ACTIONS_RESULTS_URL, as the
  * plugins use it: one gzipped JSON bundle of small text files per key. On a
- * Blacksmith runner a plain step can reach it with no token because the VM
- * proxy adds one; elsewhere the variable is absent and nothing happens.
+ * Blacksmith runner a plain step can reach it with no token; elsewhere the
+ * variable is absent and nothing happens.
  */
 
 export const ENV_CACHE_URL = 'ACTIONS_RESULTS_URL'
