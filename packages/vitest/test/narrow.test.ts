@@ -225,7 +225,7 @@ describe('narrow: module digests', () => {
 			out = out.slice(0, at) + text + out.slice(at)
 		}
 		out += footer('a.js')
-		expect(out.startsWith("'use client'\nexport function strict(a) { \"use strict\";;__")).toBe(true)
+		expect(out.startsWith("'use client'\nexport function strict(a) { \"use strict\";;typeof __")).toBe(true)
 		const module = (await import(
 			`data:text/javascript,${encodeURIComponent(out)}`
 		)) as Record<string, (a: number) => unknown>
