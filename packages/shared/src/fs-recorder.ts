@@ -248,6 +248,9 @@ export function wrapFs(
 
 // Here, not with the store that reads it: a worker must not import `node:fs`
 // before `record-reads` wraps it, or the `vm` pools hand tests the unwrapped one.
+/** After a worker record's path: the installed packages the test file loaded. */
+export const PACKAGES_SUFFIX = '.packages'
+
 /** Where a worker leaves what the test file `test` of `project` loaded, under the run's record root. */
 export function workerRecordPath(
 	root: string,

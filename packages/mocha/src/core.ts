@@ -9,7 +9,7 @@ import picomatch from 'picomatch'
  * keeps one import graph for the run and derives a spec's dependencies as
  * its closure, plus what each of its tests read while it ran.
  */
-export const RECORDS_VERSION = 2
+export const RECORDS_VERSION = 3
 
 export interface TestRecord {
 	state: 'passed' | 'failed' | 'pending'

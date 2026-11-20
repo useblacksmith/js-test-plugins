@@ -106,7 +106,8 @@ Globs are relative to the repository root.
   changed in place at the same version (`patch-package`, a git or `file:`
   dependency), a package installed outside the repository, and a newly
   installed copy that shadows the one a spec file loaded before.
-  In a pnpm store a copy counts as changed when another copy of the same
-  package is added or removed, because `pnpm add` leaves the old one in place.
+  With pnpm, which links each name to one of the versions it keeps side by
+  side, a package also counts as changed when a link that led to it now leads
+  to another version.
 - A test that reads `package.json` through a helper package reruns on any
   change to it, unless the helper reads it while being imported.

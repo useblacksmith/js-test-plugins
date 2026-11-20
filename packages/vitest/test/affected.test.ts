@@ -217,7 +217,7 @@ describe('--changed against the tree snapshot', () => {
 			`[blacksmith] filtered out 0 of ${TESTS.length} test files as unaffected, ran ${TESTS.length}`,
 		)
 		expect(repo.snapshot()).toMatchObject({
-			version: 7,
+			version: 8,
 			head: repo.git('rev-parse', 'HEAD').trim(),
 			root: '',
 			shard: null,
@@ -480,15 +480,13 @@ describe('--changed against the tree snapshot', () => {
 		expect((await repo.run('--changed')).ran).toEqual([])
 	})
 
-	test('a lockfile change reruns everything', async () => {
+	test('a lockfile change with no installed package changed reruns nothing', async () => {
 		repo.write(
 			'package-lock.json',
 			'{ "name": "fixture-affected", "lockfileVersion": 3, "x": 1 }\n',
 		)
 		repo.commit('bump lock')
-		const run = await repo.run('--changed')
-		expect(run.ran).toEqual([...TESTS, 'four', 'links'].sort())
-		expect(run.output).toContain('package-lock.json changed')
+		expect((await repo.run('--changed')).ran).toEqual([])
 	})
 })
 
@@ -1408,7 +1406,7 @@ describe('the dependency record travels through the Actions cache', () => {
 		const first = await producer.run()
 		expect(first.exitCode, first.output).toBe(0)
 		expect(first.output).toContain(
-			`saved dependency cache blacksmith-vitest-v7-${runtimeId()}-all-1of1-`,
+			`saved dependency cache blacksmith-vitest-v8-${runtimeId()}-all-1of1-`,
 		)
 		expect([...cache.entries.values()].filter((e) => e.final)).toHaveLength(1)
 
@@ -1417,7 +1415,7 @@ describe('the dependency record travels through the Actions cache', () => {
 		const restored = await consumer.run('--changed')
 		expect(restored.exitCode, restored.output).toBe(0)
 		expect(restored.output).toContain(
-			`restored dependency cache blacksmith-vitest-v7-${runtimeId()}-all-1of1-`,
+			`restored dependency cache blacksmith-vitest-v8-${runtimeId()}-all-1of1-`,
 		)
 		expect(restored.ran).toEqual([])
 
@@ -1498,7 +1496,7 @@ describe('the dependency record travels through the Actions cache', () => {
 		expect(clean.ran).toEqual([...TESTS].sort())
 		expect(clean.output).toMatch(
 			new RegExp(
-				`shadow: would have run 0 of \\d+ test files \\(0 files changed since [0-9a-f]{12}, from blacksmith-vitest-v7-${runtimeId()}-all-1of1-`,
+				`shadow: would have run 0 of \\d+ test files \\(0 files changed since [0-9a-f]{12}, from blacksmith-vitest-v8-${runtimeId()}-all-1of1-`,
 			),
 		)
 		expect(clean.output).not.toContain('restored dependency cache')
@@ -1904,10 +1902,6 @@ describe('hygiene: lockfiles, dependency globs and record growth', () => {
 		expect(Object.keys(tree)).not.toContain('vendor/reference/package-lock.json')
 		repo.write('vendor/reference/package-lock.json', '{ "lockfileVersion": 2 }\n')
 		expect((await repo.run('--changed')).ran).toEqual([])
-		repo.write('package-lock.json', '{ "lockfileVersion": 3, "touched": true }\n')
-		const all = await repo.run('--changed')
-		expect(all.ran).toEqual([...TESTS].sort())
-		expect(all.output).toContain('package-lock.json changed, running every test')
 	})
 
 	test('a dependencies glob written from the root through `..` matches, and one matching nothing warns', async () => {

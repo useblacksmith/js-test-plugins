@@ -85,6 +85,27 @@ function packageScenarios(): Scenario[] {
 			},
 		},
 		{
+			name: 'a new version of a package that a loaded package loads in turn reruns the test file',
+			packages: true,
+			async run(project) {
+				await withPackages(project)
+				// `used-package` now requires `unused-package`, as a transitive dependency.
+				project.write(
+					`node_modules/${USED}/index.js`,
+					`require(${JSON.stringify(UNUSED)})\nmodule.exports = () => ${JSON.stringify(USED)}\n`,
+				)
+				project.install(USED, '1.0.1')
+				project.write(
+					`node_modules/${USED}/index.js`,
+					`require(${JSON.stringify(UNUSED)})\nmodule.exports = () => ${JSON.stringify(USED)}\n`,
+				)
+				await expectRun(project, [USED])
+				bump(project, UNUSED)
+				await expectRun(project, [USED])
+				await expectRun(project, [])
+			},
+		},
+		{
 			name: 'a new version of a package no test loaded reruns nothing',
 			packages: true,
 			async run(project) {

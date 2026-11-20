@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync, readdirSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 
 /**
@@ -32,24 +32,108 @@ export function repositoryPackage(repo: string, file: string): string | null {
 	return relative.startsWith('..') || path.isAbsolute(relative) ? null : dir
 }
 
+/** The node_modules directory a pnpm store entry keeps its package and that package's dependencies in. */
+const STORE_ENTRY = /^((?:.*\/)?node_modules)\/\.pnpm\/[^/]+\/node_modules(?=\/)/
+
 /**
- * The copies of the package at `dir` in its pnpm store, when it is in one.
- * `pnpm add` leaves the old copy where it was and links a new one beside it,
- * so the copy a test loaded stays as it is while the name now leads elsewhere.
+ * The links that lead to installed packages. pnpm keeps each version of a
+ * package in a directory of its own and links to it by name, so the
+ * directory a test loaded a package from stays as it is when the name is
+ * made to lead to another version. A test therefore also depends on the
+ * names that led to its packages: the version found behind each is compared.
  */
-function storeCopies(dir: string): string {
-	const parts = dir.split(path.sep)
-	const at = parts.lastIndexOf('.pnpm')
-	if (at === -1 || parts[at + 2] !== 'node_modules') return ''
-	const prefix = `${parts
-		.slice(at + 3)
-		.join('+')
-		.toLowerCase()}@`
+export class PackageLinks {
+	private readonly root: string
+	private readonly listed = new Map<string, Map<string, string>>()
+
+	constructor(repo: string) {
+		try {
+			this.root = realpathSync(repo)
+		} catch {
+			this.root = repo
+		}
+	}
+
+	/** The links in the node_modules directory `base`, each with the directory it leads to; both repository-relative. */
+	private list(base: string): Map<string, string> {
+		let links = this.listed.get(base)
+		if (links) return links
+		links = new Map()
+		this.listed.set(base, links)
+		const entries = (dir: string) => {
+			try {
+				return readdirSync(path.join(this.root, dir), { withFileTypes: true })
+			} catch {
+				return []
+			}
+		}
+		const add = (link: string) => {
+			try {
+				const real = path.relative(
+					this.root,
+					realpathSync(path.join(this.root, link)),
+				)
+				const to = real.split(path.sep).join('/')
+				// Whatever the entry is called: a symbolic link, or a junction on Windows.
+				if (to !== link && !real.startsWith('..') && !path.isAbsolute(real)) {
+					links.set(link, to)
+				}
+			} catch {}
+		}
+		for (const entry of entries(base)) {
+			if (entry.name.startsWith('.')) continue
+			const at = `${base}/${entry.name}`
+			if (entry.name.startsWith('@') && !entry.isSymbolicLink()) {
+				for (const scoped of entries(at)) add(`${at}/${scoped.name}`)
+			} else add(at)
+		}
+		return links
+	}
+
+	/**
+	 * `paths` (repository-relative files and package directories) with the
+	 * links that lead to its packages: those beside the packages it holds and
+	 * beside the packages in `files`, and those in the node_modules
+	 * directories above its files and above the other `files`.
+	 */
+	expand(paths: Iterable<string>, files: Iterable<string> = []): string[] {
+		const all = new Set(paths)
+		const packages = [...all].filter(isPackagePath)
+		if (!packages.some((dir) => STORE_ENTRY.test(dir))) return [...all].sort()
+		const bases = new Set<string>()
+		const importers = [...files].filter(isPackagePath)
+		for (const dir of [...packages, ...importers]) {
+			const entry = STORE_ENTRY.exec(dir)
+			if (!entry) continue
+			bases.add(entry[0])
+			bases.add(`${entry[1]}/.pnpm/node_modules`)
+			bases.add(entry[1] as string)
+		}
+		for (const file of [...all, ...files]) {
+			if (isPackagePath(file)) continue
+			let dir = path.posix.dirname(file)
+			while (true) {
+				bases.add(dir === '.' ? 'node_modules' : `${dir}/node_modules`)
+				if (dir === '.' || dir === '/') break
+				dir = path.posix.dirname(dir)
+			}
+		}
+		for (const base of bases) {
+			for (const [link, real] of this.list(base)) {
+				if (all.has(real)) all.add(link)
+			}
+		}
+		return [...all].sort()
+	}
+}
+
+/** The pnpm store entry behind the link at `dir`, so that another build of one version (other peers) is another package. */
+function storeEntry(dir: string): string {
 	try {
-		const copies = readdirSync(parts.slice(0, at + 1).join(path.sep))
-			.filter((entry) => entry.toLowerCase().startsWith(prefix))
-			.sort()
-		return `:${copies.join(',')}`
+		const real = realpathSync(dir)
+		if (real === path.resolve(dir)) return ''
+		const entry = STORE_ENTRY.exec(real.split(path.sep).join('/'))
+		return entry ? `:${path.posix.basename(path.posix.dirname(entry[0]))}` : ''
 	} catch {
 		return ''
 	}
@@ -61,7 +145,7 @@ export function packageVersion(dir: string): string | null {
 		const manifest = JSON.parse(
 			readFileSync(path.join(dir, 'package.json'), 'utf8'),
 		) as { version?: unknown }
-		return `package:${String(manifest.version)}${storeCopies(dir)}`
+		return `package:${String(manifest.version)}${storeEntry(dir)}`
 	} catch {
 		return null
 	}

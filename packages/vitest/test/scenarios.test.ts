@@ -3,6 +3,7 @@ import path from 'node:path'
 import { test } from 'vitest'
 
 import type { Driver } from '../../shared/test/project.ts'
+import { pnpmCases } from '../../shared/test/pnpm.ts'
 import { cases } from '../../shared/test/scenarios.ts'
 import { packageRoot } from './harness.ts'
 
@@ -14,6 +15,10 @@ const driver: Driver = {
 	runner: 'vitest',
 	source: path.join(packageRoot, 'src', 'index.ts'),
 	cacheDir: 'node_modules/.vite',
+	tracksPackages: true,
+	withTool: (plugin, tool) => ({
+		'vitest.config.mjs': `import ${JSON.stringify(tool)}\nimport { defineConfig } from 'vitest/config'\nimport blacksmith from ${JSON.stringify(plugin)}\n\nexport default defineConfig({\n\tplugins: [blacksmith()],\n\ttest: { include: ['test/*.test.js'] },\n})\n`,
+	}),
 	config: (plugin) => ({
 		'vitest.config.mjs': `import { defineConfig } from 'vitest/config'\nimport blacksmith from ${JSON.stringify(plugin)}\n\nexport default defineConfig({\n\tplugins: [blacksmith()],\n\ttest: { include: ['test/*.test.js'] },\n})\n`,
 	}),
@@ -30,3 +35,6 @@ const driver: Driver = {
 }
 
 for (const { name, run } of cases(driver)) test(name, run)
+for (const { name, run } of pnpmCases(driver)) {
+	test(name, { timeout: 300_000 }, run)
+}
