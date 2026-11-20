@@ -52,11 +52,10 @@ function same(a: readonly string[], b: readonly string[]): boolean {
 export function difference(before: ResolvedDigest, after: ResolvedDigest): Change | null {
 	if (before.rest !== after.rest || before.wild !== after.wild) return 'all'
 	if (!same(before.stars, after.stars)) return 'all'
-	// Values are evaluated in order; one moved past another may see it unset.
+	// Declarations are evaluated in order; one moved past another may see it
+	// unset, a function held in a `const` included.
 	const order = (digest: Digest, other: Digest) =>
-		Object.keys(digest.units).filter(
-			(name) => digest.units[name]?.kind === 'v' && other.units[name]?.kind === 'v',
-		)
+		Object.keys(digest.units).filter((name) => Object.hasOwn(other.units, name))
 	if (!same(order(before, after), order(after, before))) return 'all'
 
 	const functions = new Set<string>()
