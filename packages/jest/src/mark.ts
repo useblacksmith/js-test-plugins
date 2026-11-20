@@ -9,7 +9,7 @@ import { analyze, footer } from '../../shared/src/units.ts'
  * function reporting when a test enters it. Jest caches what a transformer
  * returns, so a module is marked once and not again until it changes.
  */
-const SALT = 'blacksmith-narrow-2'
+const SALT = 'blacksmith-narrow-3'
 
 /** The repository-relative path of a module the repository holds as a plain file. */
 export function sourceFile(repo: string, file: string): string | null {
@@ -25,6 +25,8 @@ export function marked(repo: string, source: string, filename: string): string {
 	if (file === null) return source
 	// Jest finds an inline snapshot by the column of the call that takes it.
 	if (source.includes('InlineSnapshot')) return source
+	// The marks reach the global object through `Function`, which a module may bind to something else.
+	if (/\bFunction\b/.test(source)) return source
 	const analysis = analyze(source, filename)
 	if (!analysis) return source
 	const marks = analysis.marks

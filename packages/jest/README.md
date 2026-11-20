@@ -78,7 +78,7 @@ By default a change to a file reruns every test file that loaded it. With `narro
 | A new import | Those that had not loaded the imported module |
 | Any other top-level statement, an `export *`, or declarations that changed places | All that loaded the file, as without the option |
 
-A value built from a changed one counts as changed, and a function that mentions a changed value reruns the test files that called it. Files the plugin cannot take apart keep the default behaviour: CommonJS modules, files using `eval`, files that take an inline snapshot, and anything that is not JavaScript or TypeScript. So does a run with coverage.
+A value built from a changed one counts as changed, and a function that mentions a changed value reruns the test files that called it. Files the plugin cannot take apart keep the default behaviour: CommonJS modules, files using `eval`, files that take an inline snapshot or mention `Function`, and anything that is not JavaScript or TypeScript. So does a run with coverage, and a run of more than one project.
 
 To record function entries the plugin adds one call at the start of each top-level function before the project's transformer sees the module. Line numbers stay as they are; a column on the first line of a function may be a few characters off. Jest caches the transformed module as usual, so the cost is paid once per changed file. The record is kept beside the dependency record and travels with it.
 
