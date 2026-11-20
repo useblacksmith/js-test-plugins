@@ -213,10 +213,9 @@ export async function updateUnits(
 		} catch {}
 		await rm(file, { force: true })
 	}
-	const narrowed = vitest.config.project.length > 0
 	for (const [test, ran] of fresh) {
 		const previous = records.tests[test]
-		if (narrowed || partial) {
+		if (partial) {
 			if (!previous) continue
 			for (const [module, entered] of Object.entries(previous)) {
 				const all = (ran[module] ??= new Set())
