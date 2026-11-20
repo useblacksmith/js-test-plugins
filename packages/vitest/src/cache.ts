@@ -32,7 +32,7 @@ export {
 export const BUNDLE_VERSION = 'blacksmith-vitest-bundle-1'
 /** Files under the cache dir that travel in the bundle. */
 export const RECORD_FILE =
-	/^(dependencies\.json|blacksmith-dependencies\.json|blacksmith-packages\.json|blacksmith(\.[0-9a-f]{12})?(\.\d+of\d+)?\.json)$/
+	/^(dependencies\.json|blacksmith-dependencies\.json|blacksmith-packages\.json|blacksmith(-units)?(\.[0-9a-f]{12})?(\.\d+of\d+)?\.json)$/
 
 export const DEFAULT_CACHE_PREFIX = 'blacksmith-vitest'
 

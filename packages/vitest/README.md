@@ -62,6 +62,24 @@ Each run ends with a line saying how much it skipped: `[blacksmith] filtered out
 | `runAllTests` | `false` | Run every test instead of the affected selection. |
 | `dependencies` | `{}` | Dependencies the tracking cannot see, as globs of test files mapped to the glob(s) of the files they depend on, relative to the config root (`../shared/**` reaches outside a package): `{ 'tests/**/*.spec.ts': 'fixtures/**' }`. A change to a matching file reruns the mapped tests, git-ignored files (generated code, build output) included; a glob that matches no file in the repository warns. |
 
+## Narrowing
+
+A change to a file does not rerun every test file that loaded it. The plugin records, for each test file, which top-level functions it entered in every module it loaded, and looks at what a change actually touched:
+
+| What changed in the file | Test files that rerun |
+| --- | --- |
+| The body of a top-level function (`function f() {}`, `const f = () => {}`) | Those that called the function |
+| Another top-level declaration (a constant, a class, an enum), or a function's parameter list | Those that loaded a module importing it by name, through re-exports too. A namespace import, a dynamic `import()` or a mock of the module counts as importing every name |
+| Types, comments, or a new declaration nothing uses yet | None |
+| A new import | Those that had not loaded the imported module |
+| Any other top-level statement, an `export *`, or declarations that changed places | All that loaded the file |
+
+A value built from a changed one counts as changed, and a function that mentions a changed value reruns the test files that called it. Files the plugin cannot take apart (CommonJS, files using `eval`, anything that is not JavaScript or TypeScript) and test files run in browser mode rerun for any change to a file they loaded, as does a run with `sequence.hooks` set to anything but `'stack'`.
+
+To record function entries the plugin adds one call at the start of each top-level function while Vite transforms the module; source maps account for it. The record is kept beside the dependency record and travels with it.
+
+What narrowing cannot see: a test whose result depends on a function's source text or `length` rather than on calling it, and a module whose top-level value is there only for the side effects of evaluating it while something else exports or mentions that value.
+
 ## Caveats
 
 - **Only dependencies the test reaches through node are tracked.** `import`, `require`, and `fs` are tracked automatically, in the test process, in every node process it starts through `child_process` and in every `worker_threads` worker (each gets a preloaded recorder; their own children inherit it). A child or worker records what it has loaded as it goes, so one the test kills or terminates still counts, up to the end of its test file. For any child, the command and the arguments that name files are recorded too. A child started with `env: { ..., NODE_OPTIONS: undefined }`, or a worker with `env: SHARE_ENV`, gets no recorder, only its command line. A file the test, or a node child it started, wrote before reading it is the test's own output and is not tracked (a git-ignored directory the test copies into and reads back, say); what it was produced from is. A file a non-node program wrote and the test then read, or a module the test wrote and then imported, is still tracked, and reruns the test on every fresh checkout where it is absent. Files read by `globalSetup`, by non-node programs, or build outputs a child runs in place of their sources are not; declare them with the `dependencies` option. In browser mode, vitest itself reports nothing, so the plugin records the modules the browser loaded from the project's Vite module graph instead; files a browser test fetches at run time are not tracked.

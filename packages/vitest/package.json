@@ -39,6 +39,8 @@
 		"vitest": "^5.1.0"
 	},
 	"dependencies": {
+		"magic-string": "1.4.5",
+		"oxc-parser": "0.159.0",
 		"picomatch": "4.0.7"
 	}
 }

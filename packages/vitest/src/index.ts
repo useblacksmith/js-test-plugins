@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import type { Plugin } from 'vitest/config'
 import type { Vitest } from 'vitest/node'
 import { version as vitestVersion } from 'vitest/node'
+import { instrument } from './units.js'
 import { ENV_OWN_RECORDS, ENV_RECORD_ROOT, ENV_REPO } from '../../shared/src/fs-recorder.js'
 import { dependencyStore, recordsNatively, recordsOwn } from './records.js'
 import { repoRoot } from '../../shared/src/git.js'
@@ -94,6 +95,8 @@ export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 	let changedApplied = false
 	let restored: Promise<void> | undefined
 	let shadow: ShadowAnalysis | undefined
+	let unstacked = false
+	let warnedUnstacked = false
 	const plugin: Plugin = {
 		name: 'blacksmith',
 		config(userConfig) {
@@ -137,6 +140,16 @@ export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 				},
 			}
 		},
+		transform: {
+			order: 'pre',
+			async handler(code, id) {
+				const repo = process.env[ENV_REPO]
+				if (options.shadow || !repo) return null
+				return instrument(repo, code, id, (specifier, importer) =>
+					this.resolve(specifier, importer, { skipSelf: true }),
+				)
+			},
+		},
 		async configureVitest({ vitest, project }) {
 			// Vitest loads the root config's provider. A project with its own
 			// `root` re-evaluates this config file, so this hook may run from a
@@ -148,6 +161,16 @@ export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 				vitest.config.root,
 			)
 			active.dependencies = provider.dependencies
+			// The record of what a test file entered is written in an
+			// `afterAll`; only stacked hooks run it after the file's own.
+			if (project.config.sequence.hooks !== 'stack') unstacked = true
+			if (unstacked && !options.shadow && !warnedUnstacked) {
+				warnedUnstacked = true
+				vitest.logger.warn(
+					"[blacksmith] sequence.hooks is not 'stack': a change inside a file reruns every test file that loaded it",
+				)
+			}
+			active.narrow = !options.shadow && !unstacked
 			// Workers drop what they read outside the repository: the anchor
 			// cannot cover it, and vitest's record would otherwise keep every
 			// temp file a run touched.

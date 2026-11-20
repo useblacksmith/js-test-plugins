@@ -260,3 +260,6 @@ export function workerRecordPath(
 	const name = createHash('sha1').update(`${project}\0${test}`).digest('hex')
 	return path.join(root, 'deps', `${name}.json`)
 }
+
+/** After a worker record's path: the functions the test file entered, per module. */
+export const UNITS_SUFFIX = '.units'
