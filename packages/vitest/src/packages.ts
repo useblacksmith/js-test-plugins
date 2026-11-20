@@ -74,8 +74,12 @@ export async function readPackages(dir: string): Promise<PackageRecords | null> 
 	try {
 		const stored = JSON.parse(
 			await readFile(path.join(dir, PACKAGES_FILE), 'utf8'),
-		) as StoredPackages
-		if (stored.version !== PACKAGES_VERSION) return null
+		) as StoredPackages | PackageRecords
+		// The layout before this one named the directories under each test file.
+		if (stored.version === 1 && !('packages' in stored)) {
+			return { ...stored, version: PACKAGES_VERSION }
+		}
+		if (stored.version !== PACKAGES_VERSION || !('packages' in stored)) return null
 		const named = (positions: number[]): string[] =>
 			positions.map((position) => {
 				const dir = stored.packages[position]
