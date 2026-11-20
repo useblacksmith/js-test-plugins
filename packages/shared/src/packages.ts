@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
+import { readFileSync, readdirSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 
 /**
@@ -73,20 +73,19 @@ export class PackageLinks {
 					this.root,
 					realpathSync(path.join(this.root, link)),
 				)
-				if (!real.startsWith('..') && !path.isAbsolute(real)) {
-					links.set(link, real.split(path.sep).join('/'))
+				const to = real.split(path.sep).join('/')
+				// Whatever the entry is called: a symbolic link, or a junction on Windows.
+				if (to !== link && !real.startsWith('..') && !path.isAbsolute(real)) {
+					links.set(link, to)
 				}
 			} catch {}
 		}
 		for (const entry of entries(base)) {
 			if (entry.name.startsWith('.')) continue
 			const at = `${base}/${entry.name}`
-			if (entry.isSymbolicLink()) add(at)
-			else if (entry.name.startsWith('@')) {
-				for (const scoped of entries(at)) {
-					if (scoped.isSymbolicLink()) add(`${at}/${scoped.name}`)
-				}
-			}
+			if (entry.name.startsWith('@') && !entry.isSymbolicLink()) {
+				for (const scoped of entries(at)) add(`${at}/${scoped.name}`)
+			} else add(at)
 		}
 		return links
 	}
@@ -131,8 +130,9 @@ export class PackageLinks {
 /** The pnpm store entry behind the link at `dir`, so that another build of one version (other peers) is another package. */
 function storeEntry(dir: string): string {
 	try {
-		if (!lstatSync(dir).isSymbolicLink()) return ''
-		const entry = STORE_ENTRY.exec(realpathSync(dir).split(path.sep).join('/'))
+		const real = realpathSync(dir)
+		if (real === path.resolve(dir)) return ''
+		const entry = STORE_ENTRY.exec(real.split(path.sep).join('/'))
 		return entry ? `:${path.posix.basename(path.posix.dirname(entry[0]))}` : ''
 	} catch {
 		return ''
