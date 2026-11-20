@@ -251,10 +251,13 @@ export async function updatePackages(
 	for (const test of Object.keys(records.files)) {
 		if (!existsSync(path.join(repo, test))) delete records.files[test]
 	}
-	// A narrowed run did not see what the other projects make of a test file.
+	// A narrowed or partial run did not see what every project makes of a test file.
 	const incomplete = new Set(unseen)
 	for (const test of records.incomplete ?? []) {
-		if ((narrowed || !fresh.has(test)) && existsSync(path.join(repo, test))) {
+		if (
+			(narrowed || partial || !fresh.has(test)) &&
+			existsSync(path.join(repo, test))
+		) {
 			incomplete.add(test)
 		}
 	}
