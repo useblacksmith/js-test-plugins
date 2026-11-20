@@ -53,8 +53,8 @@ function apply(config: JestConfig, options: Options): JestConfig {
 	ctx.passWithNoTests = config.passWithNoTests === true
 	ctx.coverage =
 		config.collectCoverage === true ||
-		process.argv.some(
-			(arg) => arg === '--coverage' || arg === '--collectCoverage',
+		process.argv.some((arg) =>
+			/^--(coverage|collectCoverage)($|=(?!false$))/.test(arg),
 		)
 	// Coverage runs every test file, and counts the marks as code.
 	ctx.narrow = options.narrow === true && !ctx.coverage
