@@ -9,6 +9,8 @@
 	},
 	"devDependencies": {
 		"@types/node": "^26.6.6",
+		"magic-string": "1.4.5",
+		"oxc-parser": "0.159.0",
 		"typescript": "^7.0.2"
 	}
 }

@@ -44,6 +44,7 @@ import {
 } from '../../shared/src/git.js'
 import { shardOwner } from './sequencer.js'
 import { readPackages, updatePackages } from './packages.js'
+import { narrowing, updateUnits } from './units.js'
 import {
 	isPackagePath,
 	manifestShape,
@@ -569,6 +570,8 @@ export class TreeSnapshotProvider {
 	deselected = new Set<string>()
 	/** The plugin's `dependencies` option, compiled. */
 	dependencies: DependencyRule[] = []
+	/** The plugin's `narrow` option. */
+	narrow = false
 
 	/**
 	 * Paths whose content differs from the snapshot's. A path the snapshot did
@@ -631,13 +634,36 @@ export class TreeSnapshotProvider {
 			if ([...deps].some((dep) => changed.has(dep))) continue
 			this.deselected.add(test)
 		}
-		if (own) {
+		const needs = this.narrow
+			? await narrowing(await repoRoot(options.root), cacheDir, selected)
+			: null
+		if (own || needs) {
+			const recorded = await recordedDependencies(this.vitest, cacheDir)
+			let spared = 0
 			const affected = await affectedTests(
 				this.vitest,
 				selected,
 				await readRecords(this.vitest, cacheDir),
-				specifications,
+				own ? specifications : await this.vitest.globTestSpecifications(),
+				needs &&
+					((test, changedDeps) => {
+						const deps = recorded.get(test)
+						if (deps && !needs(test, deps, changedDeps)) {
+							this.deselected.add(test)
+							spared++
+							return false
+						}
+						return true
+					}),
 			)
+			if (spared > 0) {
+				this.vitest.logger.log(
+					`[blacksmith] ${spared} test files loaded a changed file but nothing in it that changed, not running them`,
+				)
+			}
+			// Vitest 5.1 would select by file from the changed files; it runs
+			// a test file named among them just the same.
+			if (!own) return affected.wouldRun === 'all' ? selected : [...affected.wouldRun]
 			// Vitest 4.1 runs a test file named among the changed files.
 			if (affected.wouldRun !== 'all') return [...affected.wouldRun]
 			this.vitest.logger.log(
@@ -849,6 +875,8 @@ async function affectedTests(
 	selected: readonly string[],
 	records: DependencyRecords | null,
 	specifications: ReadonlyArray<TestSpecification>,
+	/** Whether a recorded test has to run for the changed files it loaded; they all do without it. */
+	needs?: ((test: string, changedDeps: string[]) => boolean) | null,
 ): Promise<
 	{ wouldRun: Set<string>; reason: null } | { wouldRun: 'all'; reason: string }
 > {
@@ -913,13 +941,15 @@ async function affectedTests(
 				record.files[
 					path.relative(projectRoot, spec.moduleId).split(path.sep).join('/')
 				]
-			if (
-				!test ||
-				changedFiles.has(spec.moduleId) ||
-				dependsOnChange(modules(test.deps))
-			) {
+			if (!test || changedFiles.has(spec.moduleId)) {
 				wouldRun.add(spec.moduleId)
+				continue
 			}
+			const changedDeps = (modules(test.deps) ?? []).filter((file) =>
+				changedFiles.has(file),
+			)
+			if (changedDeps.length === 0 || wouldRun.has(spec.moduleId)) continue
+			if (!needs || needs(spec.moduleId, changedDeps)) wouldRun.add(spec.moduleId)
 		}
 	}
 	return { wouldRun, reason: null }
@@ -1210,6 +1240,15 @@ export class SnapshotRecorder implements Reporter {
 				.filter((module) => module.project.config.browser.enabled)
 				.map((module) => module.moduleId),
 		)
+		if (this.provider.narrow) {
+			await updateUnits(
+				this.vitest,
+				await repoRoot(this.vitest.config.root),
+				this.vitest.vite.config.cacheDir,
+				process.env[ENV_RECORD_ROOT],
+				cut || modules.some((module) => containsOnly(module)),
+			)
+		}
 		await this.reportFiltered()
 		// A failed run still vouches for the files that passed; the failed ones
 		// are left out and rerun next time. An interrupted run left files unrun,

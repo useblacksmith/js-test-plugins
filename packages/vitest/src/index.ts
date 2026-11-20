@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import type { Plugin } from 'vitest/config'
 import type { Vitest } from 'vitest/node'
 import { version as vitestVersion } from 'vitest/node'
+import { instrument } from './units.js'
 import { ENV_OWN_RECORDS, ENV_RECORD_ROOT, ENV_REPO } from '../../shared/src/fs-recorder.js'
 import { dependencyStore, recordsNatively, recordsOwn } from './records.js'
 import { repoRoot } from '../../shared/src/git.js'
@@ -53,6 +54,15 @@ export interface BlacksmithOptions {
 	 * `{ 'tests/*.spec.ts': 'fixtures/**' }`, say.
 	 */
 	dependencies?: Record<string, string | string[]>
+	/**
+	 * Experimental. Look inside a changed file instead of rerunning every
+	 * test file that loaded it: a change to a top-level function's body
+	 * reruns the test files that called the function, a change to another
+	 * top-level declaration those that loaded a module importing it, and a
+	 * change to types or comments none. Anything else in the file, and any
+	 * file the plugin cannot take apart, reruns every test file that loaded it.
+	 */
+	narrow?: boolean
 }
 
 /**
@@ -137,6 +147,16 @@ export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 				},
 			}
 		},
+		transform: {
+			order: 'pre',
+			async handler(code, id) {
+				const repo = process.env[ENV_REPO]
+				if (!options.narrow || options.shadow || !repo) return null
+				return instrument(repo, code, id, (specifier, importer) =>
+					this.resolve(specifier, importer, { skipSelf: true }),
+				)
+			},
+		},
 		async configureVitest({ vitest, project }) {
 			// Vitest loads the root config's provider. A project with its own
 			// `root` re-evaluates this config file, so this hook may run from a
@@ -148,6 +168,7 @@ export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 				vitest.config.root,
 			)
 			active.dependencies = provider.dependencies
+			active.narrow = options.narrow === true && !options.shadow
 			// Workers drop what they read outside the repository: the anchor
 			// cannot cover it, and vitest's record would otherwise keep every
 			// temp file a run touched.

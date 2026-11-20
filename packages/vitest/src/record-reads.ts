@@ -15,12 +15,14 @@ import {
 	ENV_REPO,
 	Outputs,
 	PACKAGES_SUFFIX,
+	UNITS_SUFFIX,
 	WRITE_PREFIX,
 	copyProperties,
 	isIgnored,
 	workerRecordPath,
 	wrapFs,
 } from '../../shared/src/fs-recorder.ts'
+import { HITS, LOADED } from '../../shared/src/hits.ts'
 import { isPackagePath, packageOf } from '../../shared/src/packages.ts'
 
 /**
@@ -459,7 +461,36 @@ afterAll(() => {
 	}
 	writeOwnRecord()
 	writePackages()
+	writeUnits()
 })
+
+/**
+ * Leaves the functions this test file entered, per module, for the plugin's
+ * reporter. A worker that keeps its modules between test files never loads
+ * one twice, so what an earlier file entered while loading it counts for the
+ * later ones too: the table is never cleared.
+ */
+function writeUnits(): void {
+	const hits = (globalThis as unknown as Record<string, unknown>)[HITS] as
+		| Record<string, Record<string, 1>>
+		| undefined
+	const state = workerState()
+	const root = process.env[ENV_RECORD_ROOT]
+	if (!hits || !state?.filepath || !root) return
+	const files: Record<string, string[]> = {}
+	for (const [file, entered] of Object.entries(hits)) {
+		// A module that threw while loading never reported in full.
+		if (!(LOADED in entered)) continue
+		files[file] = Object.keys(entered).filter((name) => name !== LOADED)
+	}
+	const file = `${workerRecordPath(root, state.config?.name ?? '', state.filepath)}${UNITS_SUFFIX}`
+	try {
+		mkdir(path.dirname(file), { recursive: true })
+		const partial = `${file}.${process.pid}.${workerThreads.threadId}.tmp`
+		write(partial, JSON.stringify({ test: state.filepath, files }))
+		fs.renameSync(partial, file)
+	} catch {}
+}
 
 // A vitest older than 5.1 keeps no dependency set per test file: this setup
 // file starts one for the reads recorded above, and once the file's hooks are
