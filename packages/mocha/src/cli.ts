@@ -42,6 +42,9 @@ import {
 	type Options,
 	type Records,
 	type RunRecord,
+	loadRecords,
+	storeRecords,
+	type StoredRecords,
 } from './core.ts'
 import { ENV_IN_CLI, ENV_RUN, dataDir, suffix, type Shard } from './paths.ts'
 
@@ -304,8 +307,10 @@ async function affected(
 	const owned = shard
 		? all.filter((spec) => shardFor(spec, shard.count) === shard.index - 1)
 		: all
-	const records = readJson<Records>(
-		path.join(ctx.dir, `records${suffix(shard)}.json`),
+	const records = loadRecords(
+		readJson<StoredRecords | Records>(
+			path.join(ctx.dir, `records${suffix(shard)}.json`),
+		),
 	)
 	const anchor = readJson<Anchor>(
 		path.join(ctx.dir, `anchor${suffix(shard)}.json`),
@@ -370,7 +375,7 @@ async function commit(ctx: Context, runFiles: string[]): Promise<void> {
 	const always = new Set(alwaysPaths(ctx))
 	const staleAll = pending.changed.some((file) => always.has(file))
 	const merged = mergeRecords(
-		staleAll ? null : readJson<Records>(recordsFile),
+		staleAll ? null : loadRecords(readJson<StoredRecords | Records>(recordsFile)),
 		runs,
 		pending.changed,
 		ctx.options,
@@ -381,7 +386,7 @@ async function commit(ctx: Context, runFiles: string[]): Promise<void> {
 		if (!owned.has(spec)) delete merged.files[spec]
 	}
 	const tree = await currentTree(ctx, recordedPaths(merged), recordedPaths(merged))
-	writeFileSync(recordsFile, JSON.stringify(merged))
+	writeFileSync(recordsFile, JSON.stringify(storeRecords(merged)))
 	writeFileSync(
 		path.join(ctx.dir, `anchor${suffix(pending.shard)}.json`),
 		JSON.stringify({ tree } satisfies Anchor),
