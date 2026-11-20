@@ -10,7 +10,7 @@ import {
 	type RecordedTest,
 	type ResolvedDigest,
 } from '../../shared/src/narrow.ts'
-import { analyze, footer } from '../../shared/src/units.ts'
+import { analyze, globalFooter } from '../../shared/src/units.ts'
 
 export const UNITS_FILE = 'blacksmith-units.json'
 
@@ -88,7 +88,7 @@ export async function instrument(
 ): Promise<{ code: string; map: ReturnType<MagicString['generateMap']> } | null> {
 	const file = sourceFile(repo, id)
 	if (file === null) return null
-	const analysis = analyze(code, id)
+	const analysis = analyze(code, id, file)
 	if (!analysis) {
 		digests.delete(file)
 		return null
@@ -102,7 +102,7 @@ export async function instrument(
 	)
 	const output = new MagicString(code)
 	for (const [at, text] of analysis.marks) output.appendRight(at, text)
-	output.append(footer(file))
+	output.append(globalFooter(file))
 	return { code: output.toString(), map: output.generateMap({ hires: 'boundary' }) }
 }
 

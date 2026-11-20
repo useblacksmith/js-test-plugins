@@ -9,7 +9,7 @@ import { analyze, footer } from '../../shared/src/units.ts'
  * function reporting when a test enters it. Jest caches what a transformer
  * returns, so a module is marked once and not again until it changes.
  */
-const SALT = 'blacksmith-narrow-3'
+const SALT = 'blacksmith-narrow-4'
 
 /** The repository-relative path of a module the repository holds as a plain file. */
 export function sourceFile(repo: string, file: string): string | null {

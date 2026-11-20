@@ -140,9 +140,11 @@ function bound(pattern: Node | null, names: string[]): string[] {
 /**
  * `null` for a file whose changes cannot be attributed to anything smaller
  * than the file: not JavaScript or TypeScript, unparsable, CommonJS, or
- * already using the instrumentation's names.
+ * already using the instrumentation's names. With `key` the marks report to
+ * the function `installHit` leaves on `globalThis`, as `globalFooter(key)`
+ * does; without, to the one `footer` declares in the module.
  */
-export function analyze(code: string, file: string): Analysis | null {
+export function analyze(code: string, file: string, key?: string): Analysis | null {
 	const language = lang(file)
 	if (!language || code.includes(HIT)) return null
 	let program: Node
@@ -173,6 +175,25 @@ export function analyze(code: string, file: string): Analysis | null {
 		return null
 	}
 
+	// Inside a class with a decorator, type annotations reach the runtime: a
+	// transformer that emits decorator metadata turns them into values
+	// (`design:paramtypes`), which is how dependency injection picks what to pass.
+	// A mark with a `key` goes through `globalThis`, which a module may bind to something else.
+	const mayShadow = key !== undefined && code.includes('globalThis')
+	let metadata = 0
+	const mayDecorate = typescript && code.includes('@')
+	const decorated = (node: unknown): boolean => {
+		if (!mayDecorate || !node || typeof node !== 'object') return false
+		if (Array.isArray(node)) return node.some(decorated)
+		const n = node as Node
+		if (Array.isArray(n.decorators) && n.decorators.length > 0) return true
+		for (const key in n) {
+			const child = n[key]
+			if (child && typeof child === 'object' && decorated(child)) return true
+		}
+		return false
+	}
+
 	/** Collects the identifiers `node` mentions as values into `ids`. */
 	const walk = (node: unknown, ids: Set<string>): void => {
 		if (Array.isArray(node)) {
@@ -183,7 +204,7 @@ export function analyze(code: string, file: string): Analysis | null {
 		const n = node as Node
 		if (typeof n.type !== 'string') return
 		if (
-			(n.type.startsWith('TS') && !VALUE_TS.has(n.type)) ||
+			(n.type.startsWith('TS') && !VALUE_TS.has(n.type) && metadata === 0) ||
 			n.declare === true ||
 			n.importKind === 'type' ||
 			n.exportKind === 'type'
@@ -192,6 +213,22 @@ export function analyze(code: string, file: string): Analysis | null {
 				opaque = true
 			}
 			holes.push([n.start, n.end])
+			return
+		}
+		if (mayShadow) {
+			const declared: Array<string | undefined> = []
+			if (n.type === 'VariableDeclarator') bound(n.id, declared as string[])
+			if (n.type === 'CatchClause') bound(n.param, declared as string[])
+			if (n.type.startsWith('Class') || n.type.includes('Function')) declared.push(n.id?.name)
+			for (const param of (n.params ?? []) as Node[]) {
+				bound(param.type === 'TSParameterProperty' ? param.parameter : param, declared as string[])
+			}
+			if (declared.includes('globalThis')) opaque = true
+		}
+		if ((n.type === 'ClassDeclaration' || n.type === 'ClassExpression') && decorated(n)) {
+			metadata++
+			children(n, ids)
+			metadata--
 			return
 		}
 		switch (n.type) {
@@ -243,6 +280,10 @@ export function analyze(code: string, file: string): Analysis | null {
 				break
 			}
 		}
+		children(n, ids)
+	}
+
+	const children = (n: Node, ids: Set<string>): void => {
 		for (const key in n) {
 			if (key === 'type' || key === 'start' || key === 'end') continue
 			const child = n[key]
@@ -273,7 +314,12 @@ export function analyze(code: string, file: string): Analysis | null {
 
 	const mark = (name: string, fn: Node): void => {
 		const body = fn.body as Node
-		const call = `${HIT}(${JSON.stringify(name)})`
+		// A function's text may be run somewhere else (`fn.toString()` into an inline script),
+		// where the call must do nothing. With a `key` it names nothing of the module's.
+		const call =
+			key === undefined
+				? `typeof ${HIT}=="function"&&${HIT}(${JSON.stringify(name)})`
+				: `globalThis.${HIT}?.(${JSON.stringify(key)},${JSON.stringify(name)})`
 		if (body.type !== 'BlockStatement' && body.type !== 'FunctionBody') {
 			marks.push([body.start, `(${call},`], [body.end, ')'])
 			return
@@ -352,6 +398,7 @@ export function analyze(code: string, file: string): Analysis | null {
 								? '*'
 								: (specifier.imported.name ?? specifier.imported.value)
 					names.push([name, specifier.local.name])
+					if (mayShadow && specifier.local.name === 'globalThis') opaque = true
 				}
 				// TypeScript drops an import that names only types.
 				if (node.specifiers.length > 0 && names.length === 0) break
@@ -538,4 +585,13 @@ export function footer(key: string, typed = false): string {
 	const table = `${HIT}_t`
 	// Two semicolons: a transformer may take the first as the end of the statement before and write after it.
 	return `\n;;var ${table}=Function("return")();function ${HIT}(n=""){(${table}??=((Function("return this")().${HITS}??={})[${JSON.stringify(key)}]??={}))[n]=1}${loaded}`
+}
+
+/**
+ * What a module marked with a `key` ends with. Nothing in it or in the marks
+ * belongs to the module, so a transformer that knows the module's
+ * declarations cannot simplify a mark into one that only runs inside it.
+ */
+export function globalFooter(key: string): string {
+	return `\n;globalThis.${HIT}?.(${JSON.stringify(key)},${JSON.stringify(LOADED)});`
 }

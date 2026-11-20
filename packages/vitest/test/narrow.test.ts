@@ -225,7 +225,7 @@ describe('narrow: module digests', () => {
 			out = out.slice(0, at) + text + out.slice(at)
 		}
 		out += footer('a.js')
-		expect(out.startsWith("'use client'\nexport function strict(a) { \"use strict\";;__")).toBe(true)
+		expect(out.startsWith("'use client'\nexport function strict(a) { \"use strict\";;typeof __")).toBe(true)
 		const module = (await import(
 			`data:text/javascript,${encodeURIComponent(out)}`
 		)) as Record<string, (a: number) => unknown>
@@ -290,6 +290,49 @@ describe('narrow: module digests', () => {
 		const code = "export function f() {\n\t'use strict'\n\treturn 1\n}"
 		const analysis = analyze(code, 'a.js')
 		expect(analysis?.marks.map(([, text]) => text[0])).toEqual([';'])
+	})
+
+	test.each([undefined, 'a.js'])("a marked function's text runs outside its module (key %s)", (key) => {
+		const code = 'export function f() {\n\treturn 1\n}\nexport const g = () => 2'
+		let marked = code
+		const marks = analyze(code, 'a.js', key)?.marks ?? []
+		for (const [at, text] of [...marks].sort((a, b) => b[0] - a[0])) {
+			marked = marked.slice(0, at) + text + marked.slice(at)
+		}
+		expect(marks).toHaveLength(3)
+		const body = marked.replace(/export /g, '')
+		expect(new Function(`${body}\nreturn [f(), g()]`)()).toEqual([1, 2])
+		// Nothing of the module's is named, so no transformer can tie the call to it.
+		if (key) expect(marked).not.toMatch(/[^.]__blacksmith_hit__/)
+	})
+
+	test.each([
+		'export function f() {\n\tconst globalThis = 1\n\treturn globalThis\n}',
+		'export const f = (globalThis) => globalThis',
+		'export function f({ a: [globalThis] }) {}',
+		'export function f() {\n\ttry {} catch (globalThis) {}\n}',
+		'export function globalThis() {}',
+		'export class A {\n\tm(globalThis = 1) {}\n}',
+		"import globalThis from './a'\nexport const f = () => globalThis",
+	])('a module that binds globalThis is not marked through it: %s', (code) => {
+		expect(analyze(code, 'a.js', 'a.js')).toBeNull()
+		expect(analyze(code, 'a.js')).not.toBeNull()
+		expect(analyze('export const f = () => globalThis.a', 'a.js', 'a.js')).not.toBeNull()
+	})
+
+	test('a type annotation in a class with a decorator is code', () => {
+		const service = (type: string, decorator: string): string =>
+			`import { A, B } from './deps'\nimport { inject } from './inject'\n${decorator}export class Service {\n\tconstructor(private dep: ${type}) {}\n}`
+		const plain = digest(service('A', ''), 'a.ts')
+		expect(difference(plain, digest(service('B', ''), 'a.ts'))).toBeNull()
+		expect(plain.imports).toEqual([])
+
+		const injected = digest(service('A', '@inject()\n'), 'a.ts')
+		expect(difference(injected, digest(service('B', '@inject()\n'), 'a.ts'))).not.toBeNull()
+		expect(injected.imports).toEqual([
+			['?./deps', ['A']],
+			['?./inject', ['inject']],
+		])
 	})
 
 	test('a declaration named like an inherited property', () => {

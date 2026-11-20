@@ -73,13 +73,13 @@ A change to a file does not rerun every test file that loaded it. The plugin rec
 | --- | --- |
 | The body of a top-level function (`function f() {}`, `const f = () => {}`) | Those that called the function |
 | Another top-level declaration (a constant, a class, an enum), or a function's parameter list | Those that loaded a module importing it by name, through re-exports too. A namespace import, a `require`, a dynamic `import()` or a `jest.mock` of the module counts as importing every name |
-| Types, comments, or a new declaration nothing uses yet | None |
+| Types, comments, or a new declaration nothing uses yet | None. A type annotation inside a class that has a decorator is not a type here: emitted decorator metadata makes it a value, so it counts as a change to the class |
 | A new import | Those that had not loaded the imported module |
 | Any other top-level statement, an `export *`, or declarations that changed places | All that loaded the file |
 
 A value built from a changed one counts as changed, and a function that mentions a changed value reruns the test files that called it. A change to a file the plugin cannot take apart reruns every test file that loaded it: CommonJS modules, files using `eval`, files that take an inline snapshot or mention `Function`, and anything that is not JavaScript or TypeScript. So does any change in a run with coverage, or of more than one project.
 
-To record function entries the plugin adds one call at the start of each top-level function before the project's transformer sees the module. Line numbers stay as they are; a column on the first line of a function moves right by the length of the added call (about 30 characters). Jest caches the transformed module as usual, so the cost is paid once per changed file. The record is kept beside the dependency record and travels with it.
+To record function entries the plugin adds one call at the start of each top-level function before the project's transformer sees the module. Line numbers stay as they are; a column on the first line of a function moves right by the length of the added call (about 60 characters). The call does nothing outside its module, so a function turned into text with `toString()` still runs wherever that text is evaluated. Jest caches the transformed module as usual, so the cost is paid once per changed file. The record is kept beside the dependency record and travels with it.
 
 What narrowing cannot see: a test whose result depends on a function's source text or `length` rather than on calling it, and a module whose top-level value is there only for the side effects of evaluating it while something else exports or mentions that value.
 
