@@ -185,7 +185,11 @@ export async function updateUnits(
 			Object.entries(ran).map(([module, entered]) => [module, [...entered].sort()]),
 		)
 	}
-	for (const [module, digest] of digests) records.modules[module] = digest
+	// A run that left tests out vouches for no file: the next run still has
+	// to compare what the tests left out last ran against.
+	if (!narrowed && !partial) {
+		for (const [module, digest] of digests) records.modules[module] = digest
+	}
 	for (const test of Object.keys(records.tests)) {
 		if (!existsSync(path.join(repo, test))) delete records.tests[test]
 	}
