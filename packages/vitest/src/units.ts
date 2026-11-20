@@ -21,7 +21,7 @@ export function unitsFile(snapshotFile: string): string {
 		path.basename(snapshotFile).replace(/^blacksmith/, 'blacksmith-units'),
 	)
 }
-const UNITS_VERSION = 1
+const UNITS_VERSION = 2
 
 interface UnitRecords {
 	version: typeof UNITS_VERSION
@@ -157,12 +157,72 @@ async function refreshDigests(repo: string, records: UnitRecords): Promise<void>
 	)
 }
 
+/** The layout before this one: `tests` named each module and its functions under every test file. */
+type LegacyUnits = Omit<UnitRecords, 'version'> & { version: 1 }
+
+/**
+ * The record as the file holds it. Most test files enter the same functions
+ * of the same modules, so `hits` holds each module with a list of functions
+ * once, as a position in `paths` followed by the names, and a test file is a
+ * list of positions in `hits`.
+ */
+interface StoredUnits extends Omit<UnitRecords, 'tests'> {
+	paths: string[]
+	hits: [number, ...string[]][]
+	tests: Record<string, number[]>
+}
+
+export function storeUnits(records: UnitRecords): StoredUnits {
+	const paths: string[] = []
+	const pathAt = new Map<string, number>()
+	const hits: StoredUnits['hits'] = []
+	const hitAt = new Map<string, number>()
+	const tests: StoredUnits['tests'] = {}
+	for (const [test, modules] of Object.entries(records.tests)) {
+		tests[test] = Object.entries(modules).map(([module, entered]) => {
+			const key = JSON.stringify([module, entered])
+			let hit = hitAt.get(key)
+			if (hit === undefined) {
+				let at = pathAt.get(module)
+				if (at === undefined) {
+					at = paths.length
+					pathAt.set(module, at)
+					paths.push(module)
+				}
+				hit = hits.length
+				hitAt.set(key, hit)
+				hits.push([at, ...entered])
+			}
+			return hit
+		})
+	}
+	return { ...records, paths, hits, tests }
+}
+
+export function loadUnits(stored: StoredUnits | LegacyUnits | null): UnitRecords | null {
+	if (stored === null || typeof stored !== 'object') return null
+	if (stored.version === 1 && !('hits' in stored)) return { ...stored, version: UNITS_VERSION }
+	if (stored.version !== UNITS_VERSION || !('hits' in stored)) return null
+	const { paths, hits, tests: positions, ...rest } = stored
+	const tests: UnitRecords['tests'] = {}
+	for (const [test, list] of Object.entries(positions)) {
+		const modules: Record<string, string[]> = {}
+		for (const position of list) {
+			const hit = hits[position]
+			const module = hit === undefined ? undefined : paths[hit[0]]
+			if (hit === undefined || typeof module !== 'string') return null
+			modules[module] = hit.slice(1) as string[]
+		}
+		tests[test] = modules
+	}
+	return { ...rest, tests }
+}
+
 async function readUnits(file: string): Promise<UnitRecords | null> {
 	try {
-		const records = JSON.parse(
-			await readFile(file, 'utf8'),
-		) as UnitRecords
-		return records.version === UNITS_VERSION ? records : null
+		return loadUnits(
+			JSON.parse(await readFile(file, 'utf8')) as StoredUnits | LegacyUnits,
+		)
 	} catch {
 		return null
 	}
@@ -238,7 +298,7 @@ export async function updateUnits(
 async function writeUnitsFile(file: string, records: UnitRecords): Promise<void> {
 	await mkdir(path.dirname(file), { recursive: true })
 	const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-	await writeFile(tmp, JSON.stringify(records))
+	await writeFile(tmp, JSON.stringify(storeUnits(records)))
 	await rename(tmp, file)
 }
 
