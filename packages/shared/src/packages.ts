@@ -9,19 +9,57 @@ import path from 'node:path'
  * changed, not every test.
  */
 
-/** Whether `file` (absolute or repository-relative) lies in an installed package. */
-export function isPackagePath(file: string): boolean {
-	return file.split(/[\\/]/).includes('node_modules')
+/**
+ * Where the last `node_modules` segment of `file` starts, -1 without one;
+ * segments end at `sep`, or at either separator when it is not given. Called
+ * for every module resolved and file read, in workers too short-lived for
+ * their code to be optimised: no array is built.
+ */
+function lastPackagesSegment(file: string, sep?: string): number {
+	for (
+		let at = file.lastIndexOf('node_modules');
+		at !== -1;
+		at = at === 0 ? -1 : file.lastIndexOf('node_modules', at - 1)
+	) {
+		const before = at === 0 ? undefined : file[at - 1]
+		const after = file[at + 12]
+		if (
+			(before === undefined || isSeparator(before, sep)) &&
+			(after === undefined || isSeparator(after, sep))
+		) {
+			return at
+		}
+	}
+	return -1
 }
 
-/** The directory of the installed package `file` belongs to, null for a file outside `node_modules`. */
-export function packageDir(file: string): string | null {
-	const parts = file.split(path.sep)
-	const at = parts.lastIndexOf('node_modules')
-	const name = parts[at + 1]
-	if (at === -1 || name === undefined || name.startsWith('.')) return null
-	const length = name.startsWith('@') ? at + 3 : at + 2
-	return parts.length < length ? null : parts.slice(0, length).join(path.sep)
+function isSeparator(character: string, sep?: string): boolean {
+	return sep === undefined
+		? character === '/' || character === '\\'
+		: character === sep
+}
+
+/** Whether `file` (absolute or repository-relative) lies in an installed package. */
+export function isPackagePath(file: string): boolean {
+	return lastPackagesSegment(file) !== -1
+}
+
+/** Whether a segment of `file`, split at `sep`, is `node_modules`. */
+export function inPackages(file: string, sep: string = path.sep): boolean {
+	return lastPackagesSegment(file, sep) !== -1
+}
+
+/** The directory of the installed package `file` belongs to, null for a file outside `node_modules`; `sep` separates its segments. */
+export function packageDir(file: string, sep: string = path.sep): string | null {
+	const at = lastPackagesSegment(file, sep)
+	if (at === -1 || at + 12 === file.length) return null
+	const start = at + 13
+	const end = file.indexOf(sep, start)
+	if (file[start] === '.') return null
+	if (file[start] !== '@') return end === -1 ? file : file.slice(0, end)
+	if (end === -1) return null
+	const scoped = file.indexOf(sep, end + 1)
+	return scoped === -1 ? file : file.slice(0, scoped)
 }
 
 /** `packageDir(file)` when it lies in the repository at `repo`; packages installed elsewhere are not tracked. */
@@ -197,9 +235,7 @@ export function packageOf(
 	repo: string | undefined,
 	absolute: string,
 ): string | null {
-	return repo && isPackagePath(absolute)
-		? repositoryPackage(repo, absolute)
-		: null
+	return repo ? repositoryPackage(repo, absolute) : null
 }
 
 /**

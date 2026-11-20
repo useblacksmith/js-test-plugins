@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type * as FS from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { inPackages } from './packages.ts'
 
 /** Marks a function this module already wrapped, so a second load leaves it alone. */
 export const BRAND = Symbol.for('blacksmith.recordReads')
@@ -34,10 +35,16 @@ export function toPath(target: unknown): string | null {
 }
 
 /** Installed packages are vouched for by the lockfile, not by their files. */
-export function isIgnored(absolute: string): boolean {
-	if (absolute.split(path.sep).includes('node_modules')) return true
-	const repo = process.env[ENV_REPO]
+export function isIgnored(
+	absolute: string,
+	repo = process.env[ENV_REPO],
+): boolean {
+	if (inPackages(absolute)) return true
 	if (!repo) return false
+	// Called for every file read: the plain prefix check spares `path.relative` its work.
+	if (absolute.startsWith(repo + path.sep) && !absolute.includes('..')) {
+		return false
+	}
 	const relative = path.relative(repo, absolute)
 	return relative.startsWith('..') || path.isAbsolute(relative)
 }
