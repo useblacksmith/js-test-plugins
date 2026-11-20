@@ -2,7 +2,8 @@ name: E2E
 
 # Each plugin as npm would install it, run on the shared scenarios against
 # this job's real Actions cache. The CI workflow runs the same scenarios from
-# source against a fake cache.
+# source against a fake cache. With the packed plugin they also include a
+# workspace installed by pnpm itself.
 on:
   push:
     branches: [main]
