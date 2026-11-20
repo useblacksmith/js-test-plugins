@@ -536,5 +536,6 @@ export function footer(key: string, typed = false): string {
 	}
 	// The table is looked up on first use: a hoisted function may run before this line does.
 	const table = `${HIT}_t`
-	return `\n;var ${table}=Function("return")();function ${HIT}(n=""){(${table}??=((Function("return this")().${HITS}??={})[${JSON.stringify(key)}]??={}))[n]=1}${loaded}`
+	// Two semicolons: a transformer may take the first as the end of the statement before and write after it.
+	return `\n;;var ${table}=Function("return")();function ${HIT}(n=""){(${table}??=((Function("return this")().${HITS}??={})[${JSON.stringify(key)}]??={}))[n]=1}${loaded}`
 }
