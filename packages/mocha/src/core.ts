@@ -9,7 +9,7 @@ import picomatch from 'picomatch'
  * keeps one import graph for the run and derives a spec's dependencies as
  * its closure, plus what each of its tests read while it ran.
  */
-export const RECORDS_VERSION = 3
+export const RECORDS_VERSION = 4
 
 export interface TestRecord {
 	state: 'passed' | 'failed' | 'pending'
@@ -43,6 +43,100 @@ export interface RunRecord {
 
 export interface Records extends RunRecord {
 	version: number
+}
+
+type StoredTest = Omit<TestRecord, 'deps'> & { deps: number[] }
+type StoredSpec = Omit<SpecRecord, 'hooks' | 'tests'> & {
+	hooks: number[]
+	tests: Record<string, StoredTest>
+}
+
+/**
+ * The record as the file holds it: each path once, and the graph, `global`,
+ * `hooks` and `deps` as positions in `paths`. A module is named once for
+ * every module that imports it, so naming it in full each time made the
+ * file several times larger.
+ */
+export interface StoredRecords {
+	version: number
+	at: number
+	paths: string[]
+	/** `[importer, ...imported]`, each a position. */
+	graph: number[][]
+	global: number[]
+	files: Record<string, StoredSpec>
+}
+
+export function storeRecords(records: Records): StoredRecords {
+	const at = new Map<string, number>()
+	const paths: string[] = []
+	const position = (file: string): number => {
+		let found = at.get(file)
+		if (found === undefined) {
+			found = paths.length
+			at.set(file, found)
+			paths.push(file)
+		}
+		return found
+	}
+	const files: StoredRecords['files'] = {}
+	for (const [spec, entry] of Object.entries(records.files)) {
+		const tests: StoredSpec['tests'] = {}
+		for (const [title, test] of Object.entries(entry.tests)) {
+			tests[title] = { ...test, deps: test.deps.map(position) }
+		}
+		files[spec] = { ...entry, hooks: entry.hooks.map(position), tests }
+	}
+	return {
+		version: RECORDS_VERSION,
+		at: records.at,
+		paths,
+		graph: Object.entries(records.graph).map(([from, to]) => [
+			position(from),
+			...to.map(position),
+		]),
+		global: records.global.map(position),
+		files,
+	}
+}
+
+/** The record a file holds, or null when it is not one this version reads. */
+export function loadRecords(stored: StoredRecords | Records | null): Records | null {
+	if (stored === null || typeof stored !== 'object') return null
+	// The layout before this one named the paths wherever they were used.
+	if (stored.version === 3 && !('paths' in stored)) {
+		return { ...stored, version: RECORDS_VERSION }
+	}
+	if (stored.version !== RECORDS_VERSION || !('paths' in stored)) return null
+	try {
+		const name = (position: number): string => {
+			const file = stored.paths[position]
+			if (typeof file !== 'string') throw new Error('not a record')
+			return file
+		}
+		const graph: Records['graph'] = {}
+		for (const [from, ...to] of stored.graph) {
+			if (from === undefined) throw new Error('not a record')
+			graph[name(from)] = to.map(name)
+		}
+		const files: Records['files'] = {}
+		for (const [spec, entry] of Object.entries(stored.files)) {
+			const tests: SpecRecord['tests'] = {}
+			for (const [title, test] of Object.entries(entry.tests)) {
+				tests[title] = { ...test, deps: test.deps.map(name) }
+			}
+			files[spec] = { ...entry, hooks: entry.hooks.map(name), tests }
+		}
+		return {
+			version: RECORDS_VERSION,
+			at: stored.at,
+			graph,
+			global: stored.global.map(name),
+			files,
+		}
+	} catch {
+		return null
+	}
 }
 
 export interface Options {
