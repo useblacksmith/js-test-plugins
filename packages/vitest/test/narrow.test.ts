@@ -253,6 +253,12 @@ describe('narrow: module digests', () => {
 		])
 	})
 
+	test('imports that change places rerun everything', () => {
+		const before = digest("import './a.js'\nexport { b } from './b.js'\nexport const c = 1", 'm.js')
+		const after = digest("export { b } from './b.js'\nimport './a.js'\nexport const c = 1", 'm.js')
+		expect(difference(before, after)).toBe('all')
+	})
+
 	test('a function held in a const that changes places reruns everything', () => {
 		const before = digest('export const f = () => 1\nexport const a = f()')
 		const after = digest('export const a = f()\nexport const f = () => 1')

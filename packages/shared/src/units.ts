@@ -264,6 +264,8 @@ export function analyze(code: string, file: string): Analysis | null {
 	const reexports: Digest['reexports'] = {}
 	const stars: string[] = []
 	const imported: Array<{ source: string; names: Array<[imported: string, local: string]> }> = []
+	// The modules a static import or re-export names, in the order they are evaluated.
+	const linked: Array<string | (typeof imported)[number]> = []
 	const bindings = new Map<string, string>()
 	const marks: Analysis['marks'] = []
 
@@ -352,10 +354,12 @@ export function analyze(code: string, file: string): Analysis | null {
 				// TypeScript drops an import that names only types.
 				if (node.specifiers.length > 0 && names.length === 0) break
 				imported.push({ source: node.source.value, names })
+				linked.push(imported[imported.length - 1]!)
 				break
 			}
 			case 'ExportAllDeclaration': {
 				const source: string = node.source.value
+				linked.push(source)
 				if (node.exported) {
 					reexports[node.exported.name ?? node.exported.value] = [source, '*']
 				} else {
@@ -369,6 +373,7 @@ export function analyze(code: string, file: string): Analysis | null {
 					declaration(node.declaration, true)
 					break
 				}
+				if (node.source && node.exportKind !== 'type') linked.push(node.source.value)
 				for (const specifier of node.specifiers as Node[]) {
 					if (specifier.exportKind === 'type') continue
 					const local: string = specifier.local.name ?? specifier.local.value
@@ -426,22 +431,28 @@ export function analyze(code: string, file: string): Analysis | null {
 	// What a mentioned name stands for; a name that is neither is a global.
 	const used = new Set(restIds)
 	for (const draft of drafts) for (const id of draft.ids) used.add(id)
-	const sources: string[] = []
+	const dropped = new Set<(typeof imported)[number]>()
 	const imports: Import[] = [...loaded]
-	for (const { source, names: pairs } of imported) {
+	for (const entry of imported) {
+		const { source, names: pairs } = entry
 		// TypeScript drops the names a file never uses as values, and the
 		// import with them when none is left.
 		const kept = typescript ? pairs.filter(([, local]) => used.has(local)) : pairs
-		if (pairs.length > 0 && kept.length === 0) continue
-		sources.push(source)
+		if (pairs.length > 0 && kept.length === 0) {
+			dropped.add(entry)
+			continue
+		}
 		for (const [name, local] of kept) bindings.set(local, `${source}\0${name}`)
 		imports.push([
 			source,
 			kept.some(([name]) => name === '*') ? '*' : kept.map(([name]) => name),
 		])
 	}
-	for (const [, [source]] of Object.entries(reexports)) sources.push(source)
-	for (const source of stars) sources.push(source)
+	const sources: string[] = []
+	for (const entry of linked) {
+		if (typeof entry === 'string') sources.push(entry)
+		else if (!dropped.has(entry)) sources.push(entry.source)
+	}
 	for (const [source] of loaded) sources.push(source)
 
 	const refsOf = (ids: Set<string>, self: string | null): string[] =>

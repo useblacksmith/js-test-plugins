@@ -57,6 +57,10 @@ export function difference(before: ResolvedDigest, after: ResolvedDigest): Chang
 	const order = (digest: Digest, other: Digest) =>
 		Object.keys(digest.units).filter((name) => Object.hasOwn(other.units, name))
 	if (!same(order(before, after), order(after, before))) return 'all'
+	// So are the modules a file imports, and what they do as they load.
+	const linked = (digest: Digest, other: Digest) =>
+		digest.sources.filter((source) => other.sources.includes(source))
+	if (!same(linked(before, after), linked(after, before))) return 'all'
 
 	const functions = new Set<string>()
 	const locals = new Set<string>()
