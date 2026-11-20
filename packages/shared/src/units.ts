@@ -178,6 +178,8 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 	// Inside a class with a decorator, type annotations reach the runtime: a
 	// transformer that emits decorator metadata turns them into values
 	// (`design:paramtypes`), which is how dependency injection picks what to pass.
+	// A mark with a `key` goes through `globalThis`, which a module may bind to something else.
+	const mayShadow = key !== undefined && code.includes('globalThis')
 	let metadata = 0
 	const mayDecorate = typescript && code.includes('@')
 	const decorated = (node: unknown): boolean => {
@@ -212,6 +214,16 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 			}
 			holes.push([n.start, n.end])
 			return
+		}
+		if (mayShadow) {
+			const declared: Array<string | undefined> = []
+			if (n.type === 'VariableDeclarator') bound(n.id, declared as string[])
+			if (n.type === 'CatchClause') bound(n.param, declared as string[])
+			if (n.type.startsWith('Class') || n.type.includes('Function')) declared.push(n.id?.name)
+			for (const param of (n.params ?? []) as Node[]) {
+				bound(param.type === 'TSParameterProperty' ? param.parameter : param, declared as string[])
+			}
+			if (declared.includes('globalThis')) opaque = true
 		}
 		if ((n.type === 'ClassDeclaration' || n.type === 'ClassExpression') && decorated(n)) {
 			metadata++
@@ -386,6 +398,7 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 								? '*'
 								: (specifier.imported.name ?? specifier.imported.value)
 					names.push([name, specifier.local.name])
+					if (mayShadow && specifier.local.name === 'globalThis') opaque = true
 				}
 				// TypeScript drops an import that names only types.
 				if (node.specifiers.length > 0 && names.length === 0) break

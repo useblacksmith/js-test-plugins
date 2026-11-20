@@ -306,6 +306,20 @@ describe('narrow: module digests', () => {
 		if (key) expect(marked).not.toMatch(/[^.]__blacksmith_hit__/)
 	})
 
+	test.each([
+		'export function f() {\n\tconst globalThis = 1\n\treturn globalThis\n}',
+		'export const f = (globalThis) => globalThis',
+		'export function f({ a: [globalThis] }) {}',
+		'export function f() {\n\ttry {} catch (globalThis) {}\n}',
+		'export function globalThis() {}',
+		'export class A {\n\tm(globalThis = 1) {}\n}',
+		"import globalThis from './a'\nexport const f = () => globalThis",
+	])('a module that binds globalThis is not marked through it: %s', (code) => {
+		expect(analyze(code, 'a.js', 'a.js')).toBeNull()
+		expect(analyze(code, 'a.js')).not.toBeNull()
+		expect(analyze('export const f = () => globalThis.a', 'a.js', 'a.js')).not.toBeNull()
+	})
+
 	test('a type annotation in a class with a decorator is code', () => {
 		const service = (type: string, decorator: string): string =>
 			`import { A, B } from './deps'\nimport { inject } from './inject'\n${decorator}export class Service {\n\tconstructor(private dep: ${type}) {}\n}`
