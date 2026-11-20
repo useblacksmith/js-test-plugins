@@ -90,6 +90,7 @@ export default class BlacksmithSequencer extends Base {
 		const resolvers = new Set(
 			tests.flatMap((test) => test.context?.resolver ?? []),
 		)
+		ctx.oneResolver = resolvers.size <= 1
 		ctx.resolve = (from, specifier) => {
 			for (const resolver of resolvers) {
 				try {
@@ -158,7 +159,10 @@ async function affected(owned: string[], coverage: boolean): Promise<Pending> {
 			log('coverage is on: running every test file')
 			selection = everything('coverage')
 		} else {
-			if (ctx.narrow) affects = affecting(ctx, shard, records, changed)
+			// Projects may map one specifier to different files, and the function record keeps one target.
+			if (ctx.narrow && ctx.oneResolver) {
+				affects = affecting(ctx, shard, records, changed)
+			}
 			selection = select(records, owned, changed, ctx.options, affects)
 		}
 	}

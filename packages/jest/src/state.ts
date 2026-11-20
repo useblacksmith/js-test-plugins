@@ -55,6 +55,8 @@ export interface State {
 	narrow: boolean
 	/** Resolves a specifier from a file the way one of the run's projects does. */
 	resolve: Resolve
+	/** Whether every project resolves modules the same way: `resolve` answers for one of them. */
+	oneResolver: boolean
 }
 
 export type Resolve = (from: string, specifier: string) => string | null
@@ -85,6 +87,7 @@ export function state(): State {
 		pending: null,
 		narrow: false,
 		resolve: () => null,
+		oneResolver: true,
 	})
 }
 
