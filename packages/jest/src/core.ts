@@ -7,7 +7,7 @@ import { isPackagePath } from '../../shared/src/packages.ts'
  * file a module registry of its own, so the record is one dependency list per
  * test file, with the state of each of its tests beside it.
  */
-export const RECORDS_VERSION = 4
+export const RECORDS_VERSION = 5
 
 export type TestState = 'passed' | 'failed' | 'skipped'
 

@@ -13,7 +13,7 @@ import { PackageLinks, packageDir } from '../../shared/src/packages.ts'
  * test files that loaded a package whose version changed, not every one.
  */
 export const PACKAGES_FILE = 'blacksmith-packages.json'
-const PACKAGES_VERSION = 2
+const PACKAGES_VERSION = 3
 
 export interface PackageRecords {
 	version: number
