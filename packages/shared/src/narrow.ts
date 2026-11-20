@@ -26,6 +26,7 @@ export function resolveDigest(
 		stars: digest.stars.map(to),
 		imports: digest.imports.map(([specifier, names]) => [to(specifier), names]),
 		sources: [...new Set(digest.sources.map(to))],
+		linked: new Set(digest.sources.slice(0, digest.linked).map(to)).size,
 		specifiers,
 	}
 }
@@ -59,7 +60,9 @@ export function difference(before: ResolvedDigest, after: ResolvedDigest): Chang
 	if (!same(order(before, after), order(after, before))) return 'all'
 	// So are the modules a file imports, and what they do as they load.
 	const linked = (digest: Digest, other: Digest) =>
-		digest.sources.filter((source) => other.sources.includes(source))
+		digest.sources
+			.slice(0, digest.linked)
+			.filter((source) => other.sources.slice(0, other.linked).includes(source))
 	if (!same(linked(before, after), linked(after, before))) return 'all'
 
 	const functions = new Set<string>()

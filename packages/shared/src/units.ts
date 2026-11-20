@@ -39,6 +39,8 @@ export interface Digest {
 	imports: Import[]
 	/** Every specifier the module loads statically, in order. */
 	sources: string[]
+	/** How many of `sources` come first, in order, as the module loads. */
+	linked: number
 	/** The module may take any name from a module the analysis cannot name. */
 	wild: boolean
 }
@@ -453,6 +455,7 @@ export function analyze(code: string, file: string): Analysis | null {
 		if (typeof entry === 'string') sources.push(entry)
 		else if (!dropped.has(entry)) sources.push(entry.source)
 	}
+	const first = new Set(sources).size
 	for (const [source] of loaded) sources.push(source)
 
 	const refsOf = (ids: Set<string>, self: string | null): string[] =>
@@ -508,6 +511,7 @@ export function analyze(code: string, file: string): Analysis | null {
 			stars,
 			imports,
 			sources: [...new Set(sources)],
+			linked: first,
 			wild,
 		},
 		marks,

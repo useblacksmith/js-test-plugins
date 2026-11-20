@@ -259,6 +259,12 @@ describe('narrow: module digests', () => {
 		expect(difference(before, after)).toBe('all')
 	})
 
+	test('lazy imports that change places are a change to their function', () => {
+		const before = digest("export async function f() {\n\tawait import('./a.js')\n\tawait import('./b.js')\n}", 'm.js')
+		const after = digest("export async function f() {\n\tawait import('./b.js')\n\tawait import('./a.js')\n}", 'm.js')
+		expect(difference(before, after)).toMatchObject({ functions: new Set(['f']) })
+	})
+
 	test('a function held in a const that changes places reruns everything', () => {
 		const before = digest('export const f = () => 1\nexport const a = f()')
 		const after = digest('export const a = f()\nexport const f = () => 1')
