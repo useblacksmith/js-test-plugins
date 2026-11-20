@@ -106,6 +106,56 @@ function packageScenarios(): Scenario[] {
 			},
 		},
 		{
+			name: 'a copy of a package installed nearer to the file that loads it reruns the test files that loaded the other copy',
+			packages: true,
+			async run(project) {
+				project.install(USED, '1.0.0')
+				// A workspace that takes the package from the root, as a hoisting install lays it out.
+				project.write(
+					'packages/near/index.js',
+					project.driver.style === 'esm'
+						? `import loaded from '${USED}'\nexport default loaded\n`
+						: `module.exports = require('${USED}')\n`,
+				)
+				project.write('packages/near/package.json', '{ "name": "near", "private": true }\n')
+				project.write(
+					`test/${USED}.test.js`,
+					project.packageTest('../packages/near/index.js', USED),
+				)
+				project.commit('load a package from a workspace')
+				await expectRun(project, [...ALL, USED])
+				// The workspace asks for another version: the root keeps its copy.
+				project.install(USED, '2.0.0', 'packages/near')
+				project.change('package-lock.json', '{ "nested": true }\n')
+				await expectRun(project, [USED])
+				await expectRun(project, [])
+				// And back: the nearer copy is gone.
+				project.remove(`packages/near/node_modules`)
+				project.change('package-lock.json', '{ "nested": false }\n')
+				await expectRun(project, [USED])
+				await expectRun(project, [])
+			},
+		},
+		{
+			name: 'a copy of a package installed inside the package that loads it reruns the test files that loaded that package',
+			packages: true,
+			async run(project) {
+				project.install(USED, '1.0.0')
+				project.install(UNUSED, '1.0.0')
+				project.write(
+					`node_modules/${USED}/index.js`,
+					`require(${JSON.stringify(UNUSED)})\nmodule.exports = () => ${JSON.stringify(USED)}\n`,
+				)
+				project.change(`test/${USED}.test.js`, project.packageTest(USED))
+				await expectRun(project, [...ALL, USED])
+				// Its dependency no longer fits the copy at the root: neither version there changes.
+				project.install(UNUSED, '2.0.0', `node_modules/${USED}`)
+				project.change('package-lock.json', '{ "nested": true }\n')
+				await expectRun(project, [USED])
+				await expectRun(project, [])
+			},
+		},
+		{
 			name: 'a new version of a package no test loaded reruns nothing',
 			packages: true,
 			async run(project) {

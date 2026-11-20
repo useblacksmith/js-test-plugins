@@ -219,7 +219,7 @@ describe('--changed against the tree snapshot', () => {
 			`[blacksmith] filtered out 0 of ${TESTS.length} test files as unaffected, ran ${TESTS.length}`,
 		)
 		expect(repo.snapshot()).toMatchObject({
-			version: 8,
+			version: 9,
 			head: repo.git('rev-parse', 'HEAD').trim(),
 			root: '',
 			shard: null,
@@ -1413,7 +1413,7 @@ describe('the dependency record travels through the Actions cache', () => {
 		const first = await producer.run()
 		expect(first.exitCode, first.output).toBe(0)
 		expect(first.output).toContain(
-			`saved dependency cache blacksmith-vitest-v8-${runtimeId()}-all-1of1-`,
+			`saved dependency cache blacksmith-vitest-v9-${runtimeId()}-all-1of1-`,
 		)
 		expect([...cache.entries.values()].filter((e) => e.final)).toHaveLength(1)
 
@@ -1422,7 +1422,7 @@ describe('the dependency record travels through the Actions cache', () => {
 		const restored = await consumer.run('--changed')
 		expect(restored.exitCode, restored.output).toBe(0)
 		expect(restored.output).toContain(
-			`restored dependency cache blacksmith-vitest-v8-${runtimeId()}-all-1of1-`,
+			`restored dependency cache blacksmith-vitest-v9-${runtimeId()}-all-1of1-`,
 		)
 		expect(restored.ran).toEqual([])
 
@@ -1503,7 +1503,7 @@ describe('the dependency record travels through the Actions cache', () => {
 		expect(clean.ran).toEqual([...TESTS].sort())
 		expect(clean.output).toMatch(
 			new RegExp(
-				`shadow: would have run 0 of \\d+ test files \\(0 files changed since [0-9a-f]{12}, from blacksmith-vitest-v8-${runtimeId()}-all-1of1-`,
+				`shadow: would have run 0 of \\d+ test files \\(0 files changed since [0-9a-f]{12}, from blacksmith-vitest-v9-${runtimeId()}-all-1of1-`,
 			),
 		)
 		expect(clean.output).not.toContain('restored dependency cache')

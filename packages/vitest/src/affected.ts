@@ -56,7 +56,7 @@ export const UNSUPPORTED_VITEST =
 	'[blacksmith] @useblacksmith/vitest selects changed tests on Vitest 4.1.1 or newer 4.x, or 5.1.0 or newer; upgrade vitest, or set `runAllTests: true` and drop --changed'
 // Bumped whenever the snapshot's shape changes or the records an anchor
 // vouches for gain a kind of dependency, so an older snapshot is not trusted.
-const SNAPSHOT_VERSION = 8
+const SNAPSHOT_VERSION = 9
 
 /** A `dependencies` entry, compiled: test files matching `tests` depend on files matching `deps`; both root-relative. */
 export interface DependencyRule {
