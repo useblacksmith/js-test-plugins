@@ -359,10 +359,11 @@ async function currentTree(
 		if (shape !== null) tree[file] = shape
 	}
 	const packages = await readPackages(dir)
-	for (const file of [
+	// Once per package: most test files load the same ones.
+	for (const file of new Set([
 		...(packages?.global ?? []),
 		...Object.values(packages?.files ?? {}).flat(),
-	]) {
+	])) {
 		const version = packageVersion(path.join(repo, file))
 		if (version !== null) tree[file] = version
 	}

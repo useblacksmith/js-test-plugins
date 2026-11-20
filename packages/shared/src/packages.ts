@@ -28,6 +28,8 @@ export function packageDir(file: string): string | null {
 export function repositoryPackage(repo: string, file: string): string | null {
 	const dir = packageDir(file)
 	if (dir === null) return null
+	// Called for every file read: the plain prefix check spares `path.relative` its work.
+	if (dir.startsWith(repo + path.sep) && !dir.includes('..')) return dir
 	const relative = path.relative(repo, dir)
 	return relative.startsWith('..') || path.isAbsolute(relative) ? null : dir
 }
