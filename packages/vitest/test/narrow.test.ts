@@ -302,6 +302,21 @@ describe('narrow: module digests', () => {
 		expect(new Function(`${body}\nreturn [f(), g()]`)()).toEqual([1, 2])
 	})
 
+	test('a type annotation in a class with a decorator is code', () => {
+		const service = (type: string, decorator: string): string =>
+			`import { A, B } from './deps'\nimport { inject } from './inject'\n${decorator}export class Service {\n\tconstructor(private dep: ${type}) {}\n}`
+		const plain = digest(service('A', ''), 'a.ts')
+		expect(difference(plain, digest(service('B', ''), 'a.ts'))).toBeNull()
+		expect(plain.imports).toEqual([])
+
+		const injected = digest(service('A', '@inject()\n'), 'a.ts')
+		expect(difference(injected, digest(service('B', '@inject()\n'), 'a.ts'))).not.toBeNull()
+		expect(injected.imports).toEqual([
+			['?./deps', ['A']],
+			['?./inject', ['inject']],
+		])
+	})
+
 	test('a declaration named like an inherited property', () => {
 		const names = Object.keys(
 			digest('export const toString = 1\nexport function constructor() {}').units,

@@ -173,6 +173,23 @@ export function analyze(code: string, file: string): Analysis | null {
 		return null
 	}
 
+	// Inside a class with a decorator, type annotations reach the runtime: a
+	// transformer that emits decorator metadata turns them into values
+	// (`design:paramtypes`), which is how dependency injection picks what to pass.
+	let metadata = 0
+	const mayDecorate = typescript && code.includes('@')
+	const decorated = (node: unknown): boolean => {
+		if (!mayDecorate || !node || typeof node !== 'object') return false
+		if (Array.isArray(node)) return node.some(decorated)
+		const n = node as Node
+		if (Array.isArray(n.decorators) && n.decorators.length > 0) return true
+		for (const key in n) {
+			const child = n[key]
+			if (child && typeof child === 'object' && decorated(child)) return true
+		}
+		return false
+	}
+
 	/** Collects the identifiers `node` mentions as values into `ids`. */
 	const walk = (node: unknown, ids: Set<string>): void => {
 		if (Array.isArray(node)) {
@@ -183,7 +200,7 @@ export function analyze(code: string, file: string): Analysis | null {
 		const n = node as Node
 		if (typeof n.type !== 'string') return
 		if (
-			(n.type.startsWith('TS') && !VALUE_TS.has(n.type)) ||
+			(n.type.startsWith('TS') && !VALUE_TS.has(n.type) && metadata === 0) ||
 			n.declare === true ||
 			n.importKind === 'type' ||
 			n.exportKind === 'type'
@@ -192,6 +209,12 @@ export function analyze(code: string, file: string): Analysis | null {
 				opaque = true
 			}
 			holes.push([n.start, n.end])
+			return
+		}
+		if ((n.type === 'ClassDeclaration' || n.type === 'ClassExpression') && decorated(n)) {
+			metadata++
+			children(n, ids)
+			metadata--
 			return
 		}
 		switch (n.type) {
@@ -243,6 +266,10 @@ export function analyze(code: string, file: string): Analysis | null {
 				break
 			}
 		}
+		children(n, ids)
+	}
+
+	const children = (n: Node, ids: Set<string>): void => {
 		for (const key in n) {
 			if (key === 'type' || key === 'start' || key === 'end') continue
 			const child = n[key]
