@@ -40,6 +40,18 @@ function refuseRuntime(config: JestConfig): JestConfig {
 	return config
 }
 
+/** What the command line says about coverage, which overrides the config: the last flag wins. */
+export function coverageFlag(argv: string[]): boolean | undefined {
+	let flag: boolean | undefined
+	argv.forEach((arg, i) => {
+		const match = /^--(no-)?(?:coverage|collectCoverage)(?:=(.*))?$/.exec(arg)
+		if (!match) return
+		const value = match[2] ?? argv[i + 1]
+		flag = (value !== 'false') !== (match[1] !== undefined)
+	})
+	return flag
+}
+
 function apply(config: JestConfig, options: Options): JestConfig {
 	for (const name of ['runtime', 'testSequencer'] as const) {
 		if (config[name] !== undefined) {
@@ -51,11 +63,7 @@ function apply(config: JestConfig, options: Options): JestConfig {
 	const ctx = state()
 	ctx.options = options
 	ctx.passWithNoTests = config.passWithNoTests === true
-	ctx.coverage =
-		config.collectCoverage === true ||
-		process.argv.some((arg) =>
-			/^--(coverage|collectCoverage)($|=(?!false$))/.test(arg),
-		)
+	ctx.coverage = coverageFlag(process.argv) ?? config.collectCoverage === true
 	// Coverage runs every test file, and counts the marks as code.
 	ctx.narrow = !ctx.coverage
 	if (ctx.narrow) process.env[ENV_NARROW] = '1'

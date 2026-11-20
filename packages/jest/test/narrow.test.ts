@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { after, before, describe, test } from 'node:test'
 
+import { coverageFlag } from '../src/index.ts'
 import { Repo } from './harness.ts'
 
 const ALL = ['add', 'capped', 'double', 'shout']
@@ -87,6 +88,17 @@ for (const [mode, args] of [
 		})
 	})
 }
+
+test('the command line turns off coverage the config turns on', () => {
+	assert.equal(coverageFlag(['--coverage']), true)
+	assert.equal(coverageFlag(['--collectCoverage=true']), true)
+	assert.equal(coverageFlag(['--coverage=false']), false)
+	assert.equal(coverageFlag(['--coverage', 'false']), false)
+	assert.equal(coverageFlag(['--no-coverage']), false)
+	assert.equal(coverageFlag(['--coverage', '--no-coverage']), false)
+	assert.equal(coverageFlag(['--no-coverage', '--coverage']), true)
+	assert.equal(coverageFlag(['--runInBand']), undefined)
+})
 
 describe('a test file two projects run', () => {
 	let repo: Repo
