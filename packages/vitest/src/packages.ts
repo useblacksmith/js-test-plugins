@@ -13,7 +13,7 @@ import { PackageLinks, packageDir } from '../../shared/src/packages.ts'
  * test files that loaded a package whose version changed, not every one.
  */
 export const PACKAGES_FILE = 'blacksmith-packages.json'
-const PACKAGES_VERSION = 1
+const PACKAGES_VERSION = 2
 
 export interface PackageRecords {
 	version: number
@@ -33,12 +33,64 @@ function relative(repo: string, file: string): string | null {
 	return result.split(path.sep).join('/')
 }
 
+/**
+ * The record as the file holds it: each directory once, and a test file's
+ * list as positions in `packages`. Most test files load the same few hundred
+ * packages, so naming them under each made the file many times larger.
+ */
+interface StoredPackages {
+	version: number
+	packages: string[]
+	files: Record<string, number[]>
+	global: number[]
+	incomplete?: string[]
+}
+
+function store(records: PackageRecords): StoredPackages {
+	const at = new Map<string, number>()
+	const packages: string[] = []
+	const position = (dir: string): number => {
+		let found = at.get(dir)
+		if (found === undefined) {
+			found = packages.length
+			at.set(dir, found)
+			packages.push(dir)
+		}
+		return found
+	}
+	const files: Record<string, number[]> = {}
+	for (const [file, dirs] of Object.entries(records.files)) files[file] = dirs.map(position)
+	const stored: StoredPackages = {
+		version: PACKAGES_VERSION,
+		packages,
+		files,
+		global: records.global.map(position),
+	}
+	if (records.incomplete) stored.incomplete = records.incomplete
+	return stored
+}
+
 export async function readPackages(dir: string): Promise<PackageRecords | null> {
 	try {
-		const records = JSON.parse(
+		const stored = JSON.parse(
 			await readFile(path.join(dir, PACKAGES_FILE), 'utf8'),
-		) as PackageRecords
-		return records.version === PACKAGES_VERSION ? records : null
+		) as StoredPackages
+		if (stored.version !== PACKAGES_VERSION) return null
+		const named = (positions: number[]): string[] =>
+			positions.map((position) => {
+				const dir = stored.packages[position]
+				if (dir === undefined) throw new Error('not a package record')
+				return dir
+			})
+		const files: Record<string, string[]> = {}
+		for (const [file, positions] of Object.entries(stored.files)) files[file] = named(positions)
+		const records: PackageRecords = {
+			version: PACKAGES_VERSION,
+			files,
+			global: named(stored.global),
+		}
+		if (stored.incomplete) records.incomplete = stored.incomplete
+		return records
 	} catch {
 		return null
 	}
@@ -291,6 +343,6 @@ export async function updatePackages(
 	await mkdir(dir, { recursive: true })
 	const file = path.join(dir, PACKAGES_FILE)
 	const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-	await writeFile(tmp, JSON.stringify(records))
+	await writeFile(tmp, JSON.stringify(store(records)))
 	await rename(tmp, file)
 }
