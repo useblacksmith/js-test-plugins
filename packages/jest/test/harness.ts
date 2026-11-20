@@ -14,7 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import type { Records } from '../src/core.ts'
+import { loadRecords, type Records, type StoredRecords } from '../src/core.ts'
 
 export const packageRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -114,9 +114,13 @@ export class Repo {
 	}
 
 	records(shard = ''): Records {
-		return JSON.parse(
-			this.read(`node_modules/.cache/blacksmith-jest/records${shard}.json`),
-		) as Records
+		const records = loadRecords(
+			JSON.parse(
+				this.read(`node_modules/.cache/blacksmith-jest/records${shard}.json`),
+			) as StoredRecords,
+		)
+		if (!records) throw new Error('no dependency record')
+		return records
 	}
 
 	/** Which test files the output of a run names as affected, without `test/` and the extension. */

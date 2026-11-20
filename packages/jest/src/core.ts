@@ -7,7 +7,7 @@ import { isPackagePath } from '../../shared/src/packages.ts'
  * file a module registry of its own, so the record is one dependency list per
  * test file, with the state of each of its tests beside it.
  */
-export const RECORDS_VERSION = 3
+export const RECORDS_VERSION = 4
 
 export type TestState = 'passed' | 'failed' | 'skipped'
 
@@ -37,6 +37,79 @@ export interface Records {
 	at: number
 	global: string[]
 	files: Record<string, FileRecord>
+}
+
+/**
+ * The record as the file holds it: each path once, and `global`, `deps` and
+ * `manifests` as positions in `paths`. Test files load mostly the same
+ * modules and packages, so naming them under each made the file several
+ * times larger.
+ */
+export interface StoredRecords {
+	version: number
+	at: number
+	paths: string[]
+	global: number[]
+	files: Record<string, Omit<FileRecord, 'deps' | 'manifests'> & { deps: number[]; manifests?: number[] }>
+}
+
+export function storeRecords(records: Records): StoredRecords {
+	const at = new Map<string, number>()
+	const paths: string[] = []
+	const position = (file: string): number => {
+		let found = at.get(file)
+		if (found === undefined) {
+			found = paths.length
+			at.set(file, found)
+			paths.push(file)
+		}
+		return found
+	}
+	const files: StoredRecords['files'] = {}
+	for (const [spec, entry] of Object.entries(records.files)) {
+		const { deps, manifests, ...rest } = entry
+		files[spec] = { ...rest, deps: deps.map(position) }
+		if (manifests) files[spec].manifests = manifests.map(position)
+	}
+	return {
+		version: RECORDS_VERSION,
+		at: records.at,
+		paths,
+		global: records.global.map(position),
+		files,
+	}
+}
+
+/** The record a file holds, or null when it is not one this version reads. */
+export function loadRecords(stored: StoredRecords | Records | null): Records | null {
+	if (stored === null || typeof stored !== 'object') return null
+	// The layout before this one named the paths under each test file.
+	if (stored.version === 3 && !('paths' in stored)) {
+		return { ...stored, version: RECORDS_VERSION }
+	}
+	if (stored.version !== RECORDS_VERSION || !('paths' in stored)) return null
+	try {
+		const named = (positions: number[]): string[] =>
+			positions.map((position) => {
+				const file = stored.paths[position]
+				if (typeof file !== 'string') throw new Error('not a record')
+				return file
+			})
+		const files: Records['files'] = {}
+		for (const [spec, entry] of Object.entries(stored.files)) {
+			const { deps, manifests, ...rest } = entry
+			files[spec] = { ...rest, deps: named(deps) }
+			if (manifests) files[spec].manifests = named(manifests)
+		}
+		return {
+			version: RECORDS_VERSION,
+			at: stored.at,
+			global: named(stored.global),
+			files,
+		}
+	} catch {
+		return null
+	}
 }
 
 /** Whether the change to `file`, which the test file `spec` loaded, can alter what `spec` does. */

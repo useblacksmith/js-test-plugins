@@ -5,7 +5,9 @@ import { shardFor } from '../../shared/src/shard.ts'
 import {
 	RECORDS_VERSION,
 	readManifests,
+	loadRecords,
 	recordedPaths,
+	type StoredRecords,
 	select,
 	type Affects,
 	type Decision,
@@ -132,7 +134,7 @@ async function affected(owned: string[], coverage: boolean): Promise<Pending> {
 	const ctx = state()
 	const shard = ctx.shard
 	await restore(ctx, shard)
-	const records = readJson<Records>(recordsFile(ctx, shard))
+	const records = loadRecords(readJson<StoredRecords | Records>(recordsFile(ctx, shard)))
 	const anchor = readJson<Anchor>(anchorFile(ctx, shard))
 	const everything = (reason: string): Record<string, Decision> =>
 		Object.fromEntries(owned.map((spec) => [spec, { run: true, reason }]))
