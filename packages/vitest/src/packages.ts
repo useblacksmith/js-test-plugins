@@ -160,6 +160,9 @@ export function globalPackages(vitest: Vitest, repo: string): string[] {
 		} catch {
 			continue
 		}
+		// pnpm: the link that led here, which may come to lead to another version.
+		const link = dir === real ? null : relative(repo, dir)
+		if (link !== null && packageDir(dir) !== null) found.add(link)
 		if (seen.has(real)) continue
 		seen.add(real)
 		const inRepo = relative(repo, real)
