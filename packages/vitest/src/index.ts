@@ -54,15 +54,6 @@ export interface BlacksmithOptions {
 	 * `{ 'tests/*.spec.ts': 'fixtures/**' }`, say.
 	 */
 	dependencies?: Record<string, string | string[]>
-	/**
-	 * Experimental. Look inside a changed file instead of rerunning every
-	 * test file that loaded it: a change to a top-level function's body
-	 * reruns the test files that called the function, a change to another
-	 * top-level declaration those that loaded a module importing it, and a
-	 * change to types or comments none. Anything else in the file, and any
-	 * file the plugin cannot take apart, reruns every test file that loaded it.
-	 */
-	narrow?: boolean
 }
 
 /**
@@ -153,7 +144,7 @@ export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 			order: 'pre',
 			async handler(code, id) {
 				const repo = process.env[ENV_REPO]
-				if (!options.narrow || options.shadow || !repo) return null
+				if (options.shadow || !repo) return null
 				return instrument(repo, code, id, (specifier, importer) =>
 					this.resolve(specifier, importer, { skipSelf: true }),
 				)
@@ -173,13 +164,13 @@ export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 			// The record of what a test file entered is written in an
 			// `afterAll`; only stacked hooks run it after the file's own.
 			if (project.config.sequence.hooks !== 'stack') unstacked = true
-			if (options.narrow && unstacked && !warnedUnstacked) {
+			if (unstacked && !options.shadow && !warnedUnstacked) {
 				warnedUnstacked = true
 				vitest.logger.warn(
-					"[blacksmith] narrow needs sequence.hooks: 'stack', every test file that loaded a changed file runs",
+					"[blacksmith] sequence.hooks is not 'stack': a change inside a file reruns every test file that loaded it",
 				)
 			}
-			active.narrow = options.narrow === true && !options.shadow && !unstacked
+			active.narrow = !options.shadow && !unstacked
 			// Workers drop what they read outside the repository: the anchor
 			// cannot cover it, and vitest's record would otherwise keep every
 			// temp file a run touched.

@@ -570,7 +570,7 @@ export class TreeSnapshotProvider {
 	deselected = new Set<string>()
 	/** The plugin's `dependencies` option, compiled. */
 	dependencies: DependencyRule[] = []
-	/** The plugin's `narrow` option. */
+	/** Whether to look inside a changed file instead of rerunning every test file that loaded it. */
 	narrow = false
 
 	/**

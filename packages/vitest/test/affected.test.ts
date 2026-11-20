@@ -235,7 +235,7 @@ describe('--changed against the tree snapshot', () => {
 	})
 
 	test('a dirty dependency reruns only its dependents', async () => {
-		repo.write('src/lib/b.ts', "export const b = 'b' // edited\n")
+		repo.write('src/lib/b.ts', "export const b = 'b'\nvoid 0\n")
 		const dirty = await repo.run('--changed')
 		expect(dirty.ran).toEqual(['three', 'two'])
 		expect(dirty.output).toContain(
@@ -607,7 +607,7 @@ describe('sharding', () => {
 
 	test('a changed dependency only reruns dependents the shard owns', async () => {
 		await repo.run('--shard=1/2')
-		repo.write('src/lib/a.ts', "export const a = 'a' // edited\n")
+		repo.write('src/lib/a.ts', "export const a = 'a'\nvoid 0\n")
 		const run = await repo.run('--changed', '--shard=1/2')
 		expect(run.ran).toEqual(
 			owned(1, 2).filter((name) => ['one', 'two'].includes(name)),
@@ -1588,7 +1588,7 @@ describe('the dependency record travels through the Actions cache', () => {
 				ACTIONS_RESULTS_URL: cache.url,
 				BLACKSMITH_CUSTOM_SEQUENCER: '1',
 			}
-			repo.write('src/lib/a.ts', "export const a = 'a' // edited\n")
+			repo.write('src/lib/a.ts', "export const a = 'a'\nvoid 0\n")
 			const run = await repo.run('--changed', `--shard=${shard}`)
 			expect(run.exitCode, run.output).toBe(0)
 			expect(run.output).toContain('restored dependency cache')
@@ -2045,7 +2045,7 @@ describe('browser mode', () => {
 		for (const [file, expected] of edits) {
 			repo.write(
 				file,
-				`${readFileSync(path.join(repo.cwd, file), 'utf8')}// edited\n`,
+				`${readFileSync(path.join(repo.cwd, file), 'utf8')}void 0\n`,
 			)
 			const dirty = await repo.run('--changed')
 			expect(dirty.exitCode, dirty.output).toBe(0)

@@ -61,11 +61,10 @@ Each run ends with a line saying how much it skipped: `[blacksmith] filtered out
 |---|---|---|
 | `runAllTests` | `false` | Run every test instead of the affected selection. |
 | `dependencies` | `{}` | Dependencies the tracking cannot see, as globs of test files mapped to the glob(s) of the files they depend on, relative to the config root (`../shared/**` reaches outside a package): `{ 'tests/**/*.spec.ts': 'fixtures/**' }`. A change to a matching file reruns the mapped tests, git-ignored files (generated code, build output) included; a glob that matches no file in the repository warns. |
-| `narrow` | `false` | Experimental. Look inside a changed file instead of rerunning every test file that loaded it; see [Narrowing](#narrowing). |
 
 ## Narrowing
 
-By default a change to a file reruns every test file that loaded it. With `narrow: true` the plugin also records, for each test file, which top-level functions it entered in every module it loaded, and looks at what a change actually touched:
+A change to a file does not rerun every test file that loaded it. The plugin records, for each test file, which top-level functions it entered in every module it loaded, and looks at what a change actually touched:
 
 | What changed in the file | Test files that rerun |
 | --- | --- |
@@ -73,9 +72,9 @@ By default a change to a file reruns every test file that loaded it. With `narro
 | Another top-level declaration (a constant, a class, an enum), or a function's parameter list | Those that loaded a module importing it by name, through re-exports too. A namespace import, a dynamic `import()` or a mock of the module counts as importing every name |
 | Types, comments, or a new declaration nothing uses yet | None |
 | A new import | Those that had not loaded the imported module |
-| Any other top-level statement, an `export *`, or declarations that changed places | All that loaded the file, as without the option |
+| Any other top-level statement, an `export *`, or declarations that changed places | All that loaded the file |
 
-A value built from a changed one counts as changed, and a function that mentions a changed value reruns the test files that called it. Files the plugin cannot take apart (CommonJS, files using `eval`, anything that is not JavaScript or TypeScript) and test files run in browser mode keep the default behaviour, as does a run with `sequence.hooks` set to anything but `'stack'`.
+A value built from a changed one counts as changed, and a function that mentions a changed value reruns the test files that called it. Files the plugin cannot take apart (CommonJS, files using `eval`, anything that is not JavaScript or TypeScript) and test files run in browser mode rerun for any change to a file they loaded, as does a run with `sequence.hooks` set to anything but `'stack'`.
 
 To record function entries the plugin adds one call at the start of each top-level function while Vite transforms the module; source maps account for it. The record is kept beside the dependency record and travels with it.
 
