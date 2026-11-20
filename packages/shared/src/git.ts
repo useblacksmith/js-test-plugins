@@ -123,6 +123,37 @@ async function listKnown(
 	return known
 }
 
+/** Past this many pathspecs, one walk of the worktree costs less than a `git ls-files` per 500 of them. */
+const WALK_THRESHOLD = 2000
+
+/**
+ * `listKnown` of the literal `paths`, which past `WALK_THRESHOLD` is one
+ * listing of the whole worktree cut down to the paths and what is under them.
+ */
+async function listUnder(
+	repo: string,
+	paths: string[],
+	ignored: boolean,
+): Promise<Set<string>> {
+	if (paths.length <= WALK_THRESHOLD) return listKnown(repo, paths, true, ignored)
+	const all = await listKnown(repo, ['.'], false, ignored)
+	const named = new Set(paths)
+	const known = new Set<string>()
+	for (const file of all) {
+		if (named.has(file)) {
+			known.add(file)
+			continue
+		}
+		for (let slash = file.lastIndexOf('/'); slash > 0; slash = file.lastIndexOf('/', slash - 1)) {
+			if (named.has(file.slice(0, slash))) {
+				known.add(file)
+				break
+			}
+		}
+	}
+	return known
+}
+
 /** Entries of `sorted` under `dir/`, by binary search for the prefix. */
 function under(sorted: string[], dir: string): string[] {
 	const prefix = `${dir}/`
@@ -190,10 +221,10 @@ export async function anchorTree(
 	const others: string[] = []
 	for (const [file, stat] of present)
 		(stat.isDirectory() ? dirs : others).push(file)
-	const known = await listKnown(repo, dirs)
+	const known = await listUnder(repo, dirs, false)
 	// A recorded file counts even when git ignores it: generated code and
 	// `.env.local` are inputs the test read, whatever `.gitignore` says.
-	for (const file of await listKnown(repo, others, true, true)) known.add(file)
+	for (const file of await listUnder(repo, others, true)) known.add(file)
 	const sorted = [...known].sort()
 	const files: string[] = []
 	const modes: string[] = []

@@ -109,3 +109,6 @@ What narrowing cannot see: a test whose result depends on a function's source te
   change to one, in any directory, runs everything.
 - A child process started with an `env` that drops `NODE_OPTIONS` is not
   recorded.
+- A Jest that a test starts with the same config runs every test file it
+  matches and keeps no record of its own: what it loads and reads is recorded
+  for the test file that started it.

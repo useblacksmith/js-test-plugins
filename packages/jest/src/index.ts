@@ -7,8 +7,10 @@ import type { Options } from './core.ts'
 import {
 	ENV_NARROW,
 	ENV_RECORD,
+	ENV_RECORD_OWNER,
 	ENV_RUNTIME,
 	dataDir,
+	log,
 	resolveFromJest,
 	state,
 } from './state.ts'
@@ -60,6 +62,13 @@ function apply(config: JestConfig, options: Options): JestConfig {
 			)
 		}
 	}
+	// A Jest that a test of a recorded run started: what it reads is the test's,
+	// and the record directory, the records and the cache entry are the outer run's.
+	const owner = process.env[ENV_RECORD_OWNER]
+	if (owner !== undefined && owner !== String(process.pid)) {
+		log('started by a test of a recorded run: running every test file, recording nothing')
+		return config
+	}
 	const ctx = state()
 	ctx.options = options
 	ctx.passWithNoTests = config.passWithNoTests === true
@@ -74,6 +83,7 @@ function apply(config: JestConfig, options: Options): JestConfig {
 		const dir = dataDir(ctx.cwd)
 		mkdirSync(dir, { recursive: true })
 		process.env[ENV_RECORD] = mkdtempSync(path.join(dir, 'run-'))
+		process.env[ENV_RECORD_OWNER] = String(process.pid)
 	}
 	const runtime = moduleFile('runtime')
 	return {
