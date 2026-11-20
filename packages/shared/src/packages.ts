@@ -93,15 +93,17 @@ export class PackageLinks {
 
 	/**
 	 * `paths` (repository-relative files and package directories) with the
-	 * links that lead to its packages: those beside the packages it holds, and
-	 * those in the node_modules directories above its files and above `files`.
+	 * links that lead to its packages: those beside the packages it holds and
+	 * beside the packages in `files`, and those in the node_modules
+	 * directories above its files and above the other `files`.
 	 */
 	expand(paths: Iterable<string>, files: Iterable<string> = []): string[] {
 		const all = new Set(paths)
 		const packages = [...all].filter(isPackagePath)
 		if (!packages.some((dir) => STORE_ENTRY.test(dir))) return [...all].sort()
 		const bases = new Set<string>()
-		for (const dir of packages) {
+		const importers = [...files].filter(isPackagePath)
+		for (const dir of [...packages, ...importers]) {
 			const entry = STORE_ENTRY.exec(dir)
 			if (!entry) continue
 			bases.add(entry[0])
