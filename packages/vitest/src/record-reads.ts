@@ -23,7 +23,11 @@ import {
 	wrapFs,
 } from '../../shared/src/fs-recorder.ts'
 import { HITS, installHit, LOADED } from '../../shared/src/hits.ts'
-import { isPackagePath, packageOf } from '../../shared/src/packages.ts'
+import {
+	isPackagePath,
+	packageDir,
+	packageOf,
+} from '../../shared/src/packages.ts'
 
 /**
  * Runs as the first setup file of every test file. Vitest records what a
@@ -166,9 +170,12 @@ function readFrom(): Set<string> {
 	return currentRead().from
 }
 
+// Read once: the environment is slow to ask, and every module resolved and file read needs it.
+const REPO = process.env[ENV_REPO]
+
 /** Notes that the module at `parent` loaded the one at `loaded`, when that is in an installed package. */
 function loadedPackage(parent: string | undefined, loaded: string): void {
-	const repo = process.env[ENV_REPO]
+	const repo = REPO
 	const to = packageOf(repo, loaded)
 	if (to === null || parent === undefined) return
 	const from = packageOf(repo, parent) ?? parent
@@ -185,6 +192,40 @@ function filePath(url: string | undefined): string | undefined {
 	} catch {
 		return undefined
 	}
+}
+
+/** What a URL starts with when it names a file of the same installed package as `url`; empty when `url` names none, or cannot be told. */
+function packagePrefix(url: string): string {
+	if (!url.startsWith('file:') || url.includes('%')) return ''
+	const dir = packageDir(url, '/')
+	return dir === null ? '' : `${dir}/`
+}
+
+// Per importing module. A package's modules mostly load one another, tens of
+// thousands of times per test file, in a worker too short-lived for this
+// code to be optimised: such a load is told from the URLs alone.
+const prefixes = new Map<string, string>()
+
+function resolvedPackage(parentURL: string | undefined, url: string): void {
+	if (parentURL !== undefined) {
+		let prefix = prefixes.get(parentURL)
+		if (prefix === undefined) {
+			prefixes.set(parentURL, (prefix = packagePrefix(parentURL)))
+		}
+		if (
+			prefix !== '' &&
+			url.startsWith(prefix) &&
+			url.indexOf('node_modules', prefix.length) === -1 &&
+			// An escaped URL may hide a package nested in this one.
+			url.indexOf('%', prefix.length) === -1
+		) {
+			return
+		}
+	}
+	// No file of an installed package; an escaped URL may still hide the name.
+	if (!url.includes('node_modules') && !url.includes('%')) return
+	const loaded = filePath(url)
+	if (loaded) loadedPackage(filePath(parentURL), loaded)
 }
 
 // Vitest's module graph ends at the first installed package of a chain: what
@@ -221,8 +262,7 @@ if (!packages.hooked) {
 			resolve(specifier, context, next) {
 				const resolved = next(specifier, context)
 				try {
-					const loaded = filePath(resolved.url)
-					if (loaded) loadedPackage(filePath(context.parentURL), loaded)
+					resolvedPackage(context.parentURL, resolved.url)
 				} catch {}
 				return resolved
 			},
@@ -230,17 +270,31 @@ if (!packages.hooked) {
 	} catch {}
 }
 
-function record(file: string, cwd = process.cwd(), content = true): void {
+/** Whether `path.resolve` would return `file` as it is; false when unsure. Most reads name a file this way. */
+function isResolved(file: string): boolean {
+	return (
+		path.sep === '/' &&
+		file.length > 1 &&
+		file.charCodeAt(0) === 47 &&
+		!file.includes('/.') &&
+		!file.includes('//') &&
+		file.charCodeAt(file.length - 1) !== 47
+	)
+}
+
+function record(file: string, cwd?: string, content = true): void {
 	const set = dependencies()
 	if (!set) return
-	const absolute = path.resolve(cwd, file)
+	const absolute = isResolved(file)
+		? file
+		: path.resolve(cwd ?? process.cwd(), file)
 	// A file of an installed package read as data: the package.
-	const installed = content ? packageOf(process.env[ENV_REPO], absolute) : null
+	const installed = content ? packageOf(REPO, absolute) : null
 	if (installed !== null) {
 		packagesRead().add(installed)
 		return
 	}
-	if (isIgnored(absolute)) return
+	if (isIgnored(absolute, REPO)) return
 	// A script a child process ran may have loaded packages from beside it.
 	if (content && !isPackagePath(absolute)) readFrom().add(path.dirname(absolute))
 	if (outputs().reads(absolute, content)) set.add(absolute)
