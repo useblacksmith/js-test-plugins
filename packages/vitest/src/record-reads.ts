@@ -134,7 +134,7 @@ interface PackageState {
 	/** What each installed package, or file outside one, was seen loading from an installed package: directories. */
 	edges: Map<string, Set<string>>
 	/** The packages the running test file read a file of, or loaded in a child process. */
-	read: { test: string | undefined; dirs: Set<string> }
+	read: { test: string | undefined; dirs: Set<string>; from: Set<string> }
 	hooked: boolean
 }
 
@@ -142,14 +142,26 @@ interface PackageState {
 // process, whichever test file or `vm` context asks for it first.
 const packages = ((shared[PACKAGES] as PackageState | undefined) ??= {
 	edges: new Map(),
-	read: { test: undefined, dirs: new Set() },
+	read: { test: undefined, dirs: new Set(), from: new Set() },
 	hooked: false,
 }) as PackageState
 
-function packagesRead(): Set<string> {
+function currentRead(): PackageState['read'] {
 	const test = workerState()?.filepath
-	if (packages.read.test !== test) packages.read = { test, dirs: new Set() }
-	return packages.read.dirs
+	if (packages.read.test !== test) {
+		packages.read = { test, dirs: new Set(), from: new Set() }
+	}
+	return packages.read
+}
+
+/** The package directories the current test file read files of. */
+function packagesRead(): Set<string> {
+	return currentRead().dirs
+}
+
+/** The directories of the other files it read. */
+function readFrom(): Set<string> {
+	return currentRead().from
 }
 
 /** Notes that the module at `parent` loaded the one at `loaded`, when that is in an installed package. */
@@ -227,6 +239,8 @@ function record(file: string, cwd = process.cwd(), content = true): void {
 		return
 	}
 	if (isIgnored(absolute)) return
+	// A script a child process ran may have loaded packages from beside it.
+	if (content && !isPackagePath(absolute)) readFrom().add(path.dirname(absolute))
 	if (outputs().reads(absolute, content)) set.add(absolute)
 }
 
@@ -569,6 +583,7 @@ interface PendingPackages {
 	roots: readonly string[]
 	graph: NonNullable<WorkerState['evaluatedModules']>
 	read: Set<string>
+	from: Set<string>
 }
 
 const PENDING_PACKAGES = Symbol.for('blacksmith.vitest.pendingPackages')
@@ -591,7 +606,7 @@ function loadedPackages(pending: PendingPackages): {
 	}
 	const seen = new Set<string>()
 	// Where the files that loaded them are: pnpm's links to a package are looked up from there.
-	const importers = new Set<string>()
+	const importers = new Set<string>(pending.from)
 	while (queue.length > 0) {
 		const from = queue.pop()
 		if (from === undefined || seen.has(from)) continue
@@ -641,6 +656,7 @@ function writePackages(): void {
 		roots: [state.filepath, ...(state.config?.setupFiles ?? [])],
 		graph,
 		read: packagesRead(),
+		from: readFrom(),
 	}
 	writePendingPackages()
 	if (!pendingPackages.exits) {
