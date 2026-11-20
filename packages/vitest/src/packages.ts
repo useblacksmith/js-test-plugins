@@ -133,14 +133,14 @@ export function globalPackages(vitest: Vitest, repo: string): string[] {
 	const queue: string[] = []
 	const own = findPackage(vitest.config.root, 'vitest')
 	if (own) queue.push(own)
-	const sources = new Map<string, readonly Alias[]>()
+	const sources: [string, readonly Alias[]][] = []
 	for (const project of [vitest.getRootProject(), ...vitest.projects]) {
 		const config = project.vite.config
 		// A config file is loaded before its aliases exist; globalSetup after.
-		if (config.configFile) sources.set(config.configFile, [])
-		for (const file of config.configFileDependencies) sources.set(file, [])
+		if (config.configFile) sources.push([config.configFile, []])
+		for (const file of config.configFileDependencies) sources.push([file, []])
 		for (const file of project.config.globalSetup) {
-			sources.set(file, config.resolve.alias)
+			sources.push([file, config.resolve.alias])
 		}
 	}
 	for (const [file, aliases] of sources) {
