@@ -288,7 +288,12 @@ export class Project {
 		this.commit(`change ${file}`)
 	}
 
-	run(): Promise<Run> {
+	async run(): Promise<Run> {
+		// The real cache orders the entries under a prefix by creation time:
+		// two saved within a second of each other may restore as the older.
+		if (process.env.BLACKSMITH_E2E_CACHE === 'real' && this.runs > 0) {
+			await new Promise((resolve) => setTimeout(resolve, 1100))
+		}
 		if (this.cacheUrl !== undefined) {
 			rmSync(path.join(this.cwd, this.driver.cacheDir), {
 				recursive: true,
