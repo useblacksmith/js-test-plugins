@@ -6,6 +6,7 @@ import {
 	symlinkSync,
 	existsSync,
 	mkdirSync,
+	mkdtempSync,
 	readdirSync,
 	readFileSync,
 	rmSync,
@@ -22,6 +23,7 @@ import {
 	beforeEach,
 	describe,
 	expect,
+	onTestFinished,
 	test,
 } from 'vitest'
 import { version as vitestVersion } from 'vitest/node'
@@ -258,10 +260,15 @@ describe('--changed against the tree snapshot', () => {
 	})
 
 	test('a child process records the script it runs, what that imports and what it reads', async () => {
+		// A temp dir of this test's own: other test files run Vitest at the same time.
+		const temp = mkdtempSync(path.join(tmpdir(), 'bsm-child-test-'))
+		onTestFinished(() => {
+			delete repo.env.TMPDIR
+			rmSync(temp, { recursive: true, force: true })
+		})
+		repo.env.TMPDIR = temp
 		const leftover = () =>
-			readdirSync(tmpdir()).filter((name) =>
-				name.startsWith('blacksmith-child-'),
-			)
+			readdirSync(temp).filter((name) => name.startsWith('blacksmith-child-'))
 		const before = leftover()
 		const edits: [string, string][] = [
 			['src/scripts/child-lib.mjs', "export const lib = 'lib' // edited\n"],
