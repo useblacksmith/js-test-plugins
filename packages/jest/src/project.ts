@@ -1,4 +1,9 @@
 import { createHash } from 'node:crypto'
+import {
+	isPackagePath,
+	manifestShape,
+	packageVersion,
+} from '../../shared/src/packages.ts'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
@@ -20,6 +25,7 @@ import {
 } from '../../shared/src/git.ts'
 import {
 	RECORDS_VERSION,
+	readManifests,
 	recordedPaths,
 	ruleGlobs,
 	type Records,
@@ -33,11 +39,6 @@ const TRAVELS = /^(records|anchor)(\.\d+of\d+)?\.json$/
 /** Files that shape every test without any of them reading it: a change runs everything. */
 const ALWAYS = [
 	'package.json',
-	'package-lock.json',
-	'pnpm-lock.yaml',
-	'yarn.lock',
-	'bun.lock',
-	'bun.lockb',
 	'tsconfig.json',
 	'.swcrc',
 	'.babelrc',
@@ -95,15 +96,37 @@ async function ruleFiles({ repo, options }: State): Promise<string[]> {
 }
 
 /** The current tree of everything a change to which matters: `recorded`, the always-rerun files and the rule files. */
+/**
+ * The tree the anchor compares: file content for repository files, the
+ * installed version for packages, and for the package.json files of `ALWAYS`
+ * everything but their dependency fields. No lockfile is in it: the packages
+ * a test loaded say whether an install changed anything for it.
+ */
 export async function currentTree(
 	ctx: State,
 	recorded: Iterable<string>,
+	read: ReadonlySet<string>,
 ): Promise<Tree> {
-	return anchorTree(ctx.repo, [
-		...recorded,
-		...alwaysPaths(ctx),
+	const paths = [...recorded]
+	const always = alwaysPaths(ctx)
+	const tree = await anchorTree(ctx.repo, [
+		...paths.filter((file) => !isPackagePath(file)),
+		...always,
 		...(await ruleFiles(ctx)),
 	])
+	for (const file of paths) {
+		if (!isPackagePath(file)) continue
+		const version = packageVersion(path.join(ctx.repo, file))
+		if (version !== null) tree[file] = version
+	}
+	for (const file of always) {
+		if (path.posix.basename(file) !== 'package.json' || !(file in tree)) continue
+		// One a test read itself is compared in full: its dependency fields are that test's input.
+		if (read.has(file)) continue
+		const shape = manifestShape(path.join(ctx.repo, file))
+		if (shape !== null) tree[file] = shape
+	}
+	return tree
 }
 
 export const recordsFile = (ctx: State, shard: Shard | null): string =>
@@ -116,7 +139,7 @@ export async function writeRecords(
 	shard: Shard | null,
 	records: Records,
 ): Promise<number> {
-	const tree = await currentTree(ctx, recordedPaths(records))
+	const tree = await currentTree(ctx, recordedPaths(records), readManifests(records))
 	mkdirSync(dataDir(ctx.cwd), { recursive: true })
 	writeFileSync(recordsFile(ctx, shard), JSON.stringify(records))
 	writeFileSync(

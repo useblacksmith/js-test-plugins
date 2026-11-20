@@ -29,6 +29,10 @@ export interface Driver {
 	source: string
 	/** The directory under the project that holds the plugin's record. */
 	cacheDir: string
+	/** Whether a lockfile change reruns only the tests that loaded a package whose version changed. */
+	tracksPackages?: true
+	/** A config file that also loads the package `tool`, as a plugin or a transformer would be. */
+	withTool?(plugin: string, tool: string): Record<string, string>
 	/** Config files of the sample; `plugin` is what they load the plugin by. */
 	config(plugin: string): Record<string, string>
 	/** `node` arguments of one run that writes the runner's JSON report to `report`. */
@@ -134,6 +138,8 @@ export class Project {
 	readonly cwd: string
 	readonly driver: Driver
 	readonly installed: boolean
+	/** What the sample's config loads the plugin by. */
+	readonly plugin: string
 	/** Extra environment of the next runs. */
 	env: Record<string, string> = {}
 	/** The job the runs claim to be: cache entries are kept per job. */
@@ -172,9 +178,9 @@ export class Project {
 				path.join(modules, driver.runner),
 			)
 		}
-		const plugin =
+		this.plugin =
 			file !== undefined ? `@useblacksmith/${driver.name}` : driver.source
-		for (const [name, content] of Object.entries(sample(driver, plugin))) {
+		for (const [name, content] of Object.entries(sample(driver, this.plugin))) {
 			this.write(name, content)
 		}
 		this.git('init', '-q', '-b', 'main')
@@ -199,6 +205,79 @@ export class Project {
 		writeFileSync(path.join(this.cwd, file), content)
 	}
 
+	/** Installs `name` at `version`: a CommonJS package whose export returns its name. Not in git, as node_modules is not. */
+	install(name: string, version: string): void {
+		const dir = `node_modules/${name}`
+		this.write(`${dir}/package.json`, `${JSON.stringify({ name, version, main: 'index.js' })}\n`)
+		this.write(`${dir}/index.js`, `module.exports = () => ${JSON.stringify(name)}\n`)
+	}
+
+	/** A test file named `name` that loads the package `name`. */
+	packageTest(name: string): string {
+		const lines =
+			this.driver.style === 'esm'
+				? ["import assert from 'node:assert'", `import loaded from '${name}'`]
+				: ["const assert = require('node:assert')", `const loaded = require('${name}')`]
+		return [
+			...(this.driver.prelude === '' ? [] : [this.driver.prelude]),
+			...lines,
+			`it('${name}', () => assert.equal(loaded(), '${name}'))`,
+			'',
+		].join('\n')
+	}
+
+	private testFile(name: string, modules: string[], body: string): string {
+		const esm = this.driver.style === 'esm'
+		return [
+			...(this.driver.prelude === '' ? [] : [this.driver.prelude]),
+			...['assert', ...modules].map((module) =>
+				esm
+					? `import ${module.replace('node:', '')} from '${module.includes(':') ? module : `node:${module}`}'`
+					: `const ${module} = require('node:${module}')`,
+			),
+			`it('${name}', () => { ${body} })`,
+			'',
+		].join('\n')
+	}
+
+	/** A test file named `name` that reads `file` (relative to the project) through `fs`. */
+	readingTest(name: string, file: string): string {
+		return this.testFile(
+			name,
+			['fs'],
+			`assert.ok(fs.readFileSync(${JSON.stringify(file)}, 'utf8').length > 0)`,
+		)
+	}
+
+	/** A test file named `name` that reads `file` through the installed package `helper`, at once and from a callback. */
+	helperReadingTest(name: string, helper: string, file: string): string {
+		this.write(`node_modules/${helper}/package.json`, `${JSON.stringify({ name: helper, version: '1.0.0', main: 'index.js' })}\n`)
+		this.write(
+			`node_modules/${helper}/index.js`,
+			"const fs = require('node:fs')\nexports.sync = (file) => fs.readFileSync(file, 'utf8')\nexports.later = (file, done) => setImmediate(() => fs.readFile(file, 'utf8', done))\n",
+		)
+		const esm = this.driver.style === 'esm'
+		return [
+			...(this.driver.prelude === '' ? [] : [this.driver.prelude]),
+			esm ? "import assert from 'node:assert'" : "const assert = require('node:assert')",
+			esm ? `import helper from '${helper}'` : `const helper = require('${helper}')`,
+			`it('${name}', () => new Promise((resolve, reject) => {`,
+			`	assert.ok(helper.sync(${JSON.stringify(file)}).length > 0)`,
+			`	helper.later(${JSON.stringify(file)}, (error) => (error ? reject(error) : resolve()))`,
+			'}))',
+			'',
+		].join('\n')
+	}
+
+	/** A test file named `name` that loads the package `pkg` in a node child process. */
+	spawningTest(name: string, pkg: string): string {
+		return this.testFile(
+			name,
+			['child_process'],
+			`assert.equal(child_process.execFileSync(process.execPath, ['-e', "console.log(require('${pkg}')())"]).toString().trim(), '${pkg}')`,
+		)
+	}
+
 	read(file: string): string {
 		return readFileSync(path.join(this.cwd, file), 'utf8')
 	}
@@ -209,7 +288,12 @@ export class Project {
 		this.commit(`change ${file}`)
 	}
 
-	run(): Promise<Run> {
+	async run(): Promise<Run> {
+		// The real cache orders the entries under a prefix by creation time:
+		// two saved within a second of each other may restore as the older.
+		if (process.env.BLACKSMITH_E2E_CACHE === 'real' && this.runs > 0) {
+			await new Promise((resolve) => setTimeout(resolve, 1100))
+		}
 		if (this.cacheUrl !== undefined) {
 			rmSync(path.join(this.cwd, this.driver.cacheDir), {
 				recursive: true,

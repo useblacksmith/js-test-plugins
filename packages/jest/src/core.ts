@@ -1,19 +1,23 @@
 import picomatch from 'picomatch'
 
+import { isPackagePath } from '../../shared/src/packages.ts'
+
 /**
  * The dependency record and the rules that read it. Jest gives every test
  * file a module registry of its own, so the record is one dependency list per
  * test file, with the state of each of its tests beside it.
  */
-export const RECORDS_VERSION = 1
+export const RECORDS_VERSION = 2
 
 export type TestState = 'passed' | 'failed' | 'skipped'
 
 export interface FileRecord {
-	/** Modules the test file loaded and files it read, itself aside. */
+	/** Modules the test file loaded and files it read, itself aside, and the directories of the installed packages it loaded. */
 	deps: string[]
 	/** Full name of every test in the file → how it ended the last time it ran. */
 	tests: Record<string, TestState>
+	/** package.json files among `deps` the test read itself: compared in full, dependency fields included. */
+	manifests?: string[]
 	/** The file failed outside any test: a syntax error, a failed `beforeAll`. */
 	failed?: boolean
 }
@@ -141,8 +145,10 @@ export function mergeRecords(
 	// look up, so what the record already names stays.
 	const complete = Object.keys(out.files).every((spec) => spec in run.files)
 	if (Object.keys(run.files).length > 0) {
+		// Packages stay either way: with a warm transform cache Jest does not
+		// load the transformer's packages, and a later run without it would.
 		out.global = complete
-			? [...run.global].sort()
+			? union(out.global.filter(isPackagePath), run.global)
 			: union(out.global, run.global)
 	}
 	for (const [spec, entry] of Object.entries(run.files)) {
@@ -152,6 +158,9 @@ export function mergeRecords(
 		else {
 			out.files[spec] = {
 				deps: union(previous.deps, entry.deps),
+				...(previous.manifests || entry.manifests
+					? { manifests: union(previous.manifests, entry.manifests ?? []) }
+					: {}),
 				tests: { ...previous.tests, ...entry.tests },
 				...(entry.failed || previous.failed ? { failed: true } : {}),
 			}
@@ -169,4 +178,11 @@ export function recordedPaths(records: Records): Set<string> {
 		for (const file of entry.deps) paths.add(file)
 	}
 	return paths
+}
+
+/** Every package.json a test file read itself. */
+export function readManifests(records: Records): Set<string> {
+	return new Set(
+		Object.values(records.files).flatMap((entry) => entry.manifests ?? []),
+	)
 }

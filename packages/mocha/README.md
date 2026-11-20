@@ -46,8 +46,16 @@ and Mocha 10 or newer.
   when the record was made, so compiled output that git ignores (`dist/`)
   works too.
 
-Changes to a lockfile, `package.json`, `tsconfig.json`, `.mocharc.*` or the
-workflow file run everything.
+- **Installed packages.** The import graph names the packages a spec file
+  loaded, transitive ones included, each with the version in its
+  `package.json`. After an install, a spec file reruns when one of its packages
+  has another version or is gone. Lockfiles are not compared, and a
+  `package.json` change that only touches its dependency fields reruns nothing
+  by itself. A new version of a package loaded before the first spec file
+  (Mocha, what `.mocharc.*` requires) runs everything.
+
+Changes to anything else in `package.json`, to `tsconfig.json`, `.mocharc.*`
+or the workflow file run everything.
 
 ## Commands
 
@@ -94,5 +102,11 @@ Globs are relative to the repository root.
   skipped.
 - Tests are identified by their full title. Two tests with the same title in
   one file share a record.
-- Installed packages are not tracked file by file; a lockfile change runs
-  everything.
+- A package is known by its directory and version. Not seen: a package
+  changed in place at the same version (`patch-package`, a git or `file:`
+  dependency), a package installed outside the repository, and a newly
+  installed copy that shadows the one a spec file loaded before.
+  In a pnpm store a copy counts as changed when another copy of the same
+  package is added or removed, because `pnpm add` leaves the old one in place.
+- A test that reads `package.json` through a helper package reruns on any
+  change to it, unless the helper reads it while being imported.

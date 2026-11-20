@@ -1,10 +1,17 @@
 import { createHash } from 'node:crypto'
+import {
+	isPackagePath,
+	packageOf,
+	readDuringLoad,
+	repositoryPackage,
+} from '../../shared/src/packages.ts'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import {
 	CHILD_RECORD_ENV,
+	ENV_REPO,
 	Outputs,
 	isIgnored,
 	wrapFs,
@@ -48,12 +55,30 @@ export interface Piece {
 	deps: string[]
 	/** Paths only asked about (`stat`, `exists`): a dependency unless it is a directory. */
 	probes: string[]
+	/** package.json files the test read itself: compared in full, dependency fields included. */
+	manifests: string[]
+}
+
+/**
+ * Whether the read under way was made by code a test called, through a helper
+ * package or not. Jest's resolver, Babel and browserslist read the
+ * package.json files above every module while it loads, for fields of their own.
+ */
+function readByTest(): boolean {
+	return !readDuringLoad(
+		(line) =>
+			line.includes(`${path.sep}shared${path.sep}src${path.sep}fs-recorder.`) ||
+			line.includes(`${path.sep}shared${path.sep}src${path.sep}packages.`) ||
+			line.includes(here),
+		(line) => /[\\/](jest-(runtime|resolve|haste-map)|@jest[\\/]transform)[\\/]/.test(line),
+	)
 }
 
 interface Current {
 	test: string
 	deps: Set<string>
 	probes: Set<string>
+	manifests: Set<string>
 	outputs: Outputs
 	childDir: string
 }
@@ -68,7 +93,15 @@ const root = (): string | undefined => process.env[ENV_RECORD]
 
 function reportGlobal(file: string): void {
 	const dir = root()
-	if (!dir || isIgnored(file) || globals.has(file)) return
+	if (!dir) return
+	// A package stands for its files: a change of its version reruns everything.
+	if (isIgnored(file)) {
+		const repo = process.env[ENV_REPO]
+		const installed = repo ? repositoryPackage(repo, file) : null
+		if (installed === null) return
+		file = installed
+	}
+	if (globals.has(file)) return
 	globals.add(file)
 	try {
 		raw.appendFileSync(
@@ -89,9 +122,19 @@ function install(): void {
 				return
 			}
 			const absolute = path.resolve(file)
+			// A file of an installed package read as data: the package.
+			const installed = content
+				? packageOf(process.env[ENV_REPO], absolute)
+				: null
+			if (installed !== null) {
+				current.deps.add(installed)
+				return
+			}
 			if (isIgnored(absolute) || !current.outputs.reads(absolute, content))
 				return
 			;(content ? current.deps : current.probes).add(absolute)
+			if (content && path.basename(absolute) === 'package.json' && readByTest())
+				current.manifests.add(absolute)
 		},
 		(file) => {
 			if (!current) return
@@ -167,6 +210,7 @@ export function begin(
 		test,
 		deps: new Set(),
 		probes: new Set(),
+		manifests: new Set(),
 		outputs: new Outputs(),
 		childDir,
 	}
@@ -178,9 +222,20 @@ export function end(modules: Iterable<string>): void {
 	const done = current
 	current = null
 	if (!dir || !done) return
+	const repo = process.env[ENV_REPO]
 	for (const file of modules) {
-		if (!isIgnored(file)) done.deps.add(file)
+		if (!isIgnored(file)) {
+			done.deps.add(file)
+			// `require('./package.json')`: the test holds all of it.
+			if (path.basename(file) === 'package.json') done.manifests.add(file)
+		}
+		else {
+			const installed = repo ? repositoryPackage(repo, file) : null
+			if (installed !== null) done.deps.add(installed)
+		}
 	}
+	// What this process loaded outside Jest's registry: Jest and the transformers.
+	for (const file of Object.keys(require.cache)) reportGlobal(file)
 	try {
 		for (const name of raw.readdirSync(done.childDir)) {
 			const text = raw.readFileSync(path.join(done.childDir, name), 'utf8')
@@ -193,6 +248,7 @@ export function end(modules: Iterable<string>): void {
 		test: done.test,
 		deps: [...done.deps],
 		probes: [...done.probes].filter((file) => !done.deps.has(file)),
+		manifests: [...done.manifests],
 	}
 	try {
 		raw.mkdirSync(path.join(dir, 'tests'), { recursive: true })

@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+import {
+	isPackagePath,
+	manifestShape,
+	packageVersion,
+} from '../../shared/src/packages.ts'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -60,11 +65,6 @@ const TRAVELS = /^(records|anchor)(\.\d+of\d+)?\.json$/
 /** Files that shape every test without any of them reading it: a change runs everything. */
 const ALWAYS = [
 	'package.json',
-	'package-lock.json',
-	'pnpm-lock.yaml',
-	'yarn.lock',
-	'bun.lock',
-	'bun.lockb',
 	'tsconfig.json',
 	'.mocharc.cjs',
 	'.mocharc.js',
@@ -205,6 +205,39 @@ function alwaysPaths({ cwd, repo }: Context): string[] {
 	]
 }
 
+/**
+ * The tree the anchor compares: file content for repository files, the
+ * installed version for packages, and for the package.json files of `ALWAYS`
+ * everything but their dependency fields. No lockfile is in it: the packages
+ * a test loaded say whether an install changed anything for it.
+ */
+async function currentTree(
+	ctx: Context,
+	recorded: Iterable<string>,
+	read: ReadonlySet<string>,
+): Promise<Tree> {
+	const paths = [...recorded]
+	const always = alwaysPaths(ctx)
+	const tree = await anchorTree(ctx.repo, [
+		...paths.filter((file) => !isPackagePath(file)),
+		...always,
+		...(await ruleFiles(ctx)),
+	])
+	for (const file of paths) {
+		if (!isPackagePath(file)) continue
+		const version = packageVersion(path.join(ctx.repo, file))
+		if (version !== null) tree[file] = version
+	}
+	for (const file of always) {
+		if (path.posix.basename(file) !== 'package.json' || !(file in tree)) continue
+		// One a test read itself is compared in full: its dependency fields are that test's input.
+		if (read.has(file)) continue
+		const shape = manifestShape(path.join(ctx.repo, file))
+		if (shape !== null) tree[file] = shape
+	}
+	return tree
+}
+
 function cacheKey(
 	{ cwd, repo }: Context,
 	shard: Shard | null,
@@ -285,11 +318,11 @@ async function affected(
 	} else {
 		changed = diffTrees(
 			anchor.tree,
-			await anchorTree(ctx.repo, [
-				...Object.keys(anchor.tree),
-				...alwaysPaths(ctx),
-				...(await ruleFiles(ctx)),
-			]),
+			await currentTree(
+				ctx,
+				Object.keys(anchor.tree),
+				recordedPaths(records),
+			),
 		)
 		const always = new Set(alwaysPaths(ctx))
 		const trigger = changed.find((file) => always.has(file))
@@ -330,11 +363,7 @@ async function commit(ctx: Context, runFiles: string[]): Promise<void> {
 	for (const spec of Object.keys(merged.files)) {
 		if (!owned.has(spec)) delete merged.files[spec]
 	}
-	const tree = await anchorTree(ctx.repo, [
-		...recordedPaths(merged),
-		...alwaysPaths(ctx),
-		...(await ruleFiles(ctx)),
-	])
+	const tree = await currentTree(ctx, recordedPaths(merged), recordedPaths(merged))
 	writeFileSync(recordsFile, JSON.stringify(merged))
 	writeFileSync(
 		path.join(ctx.dir, `anchor${suffix(pending.shard)}.json`),

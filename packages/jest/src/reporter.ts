@@ -22,6 +22,7 @@ import {
 	toRelative,
 	writeRecords,
 } from './project.ts'
+import { isPackagePath } from '../../shared/src/packages.ts'
 import { endGlobals, type Piece } from './record.ts'
 import { ENV_RECORD, log, state } from './state.ts'
 
@@ -86,7 +87,7 @@ export default class BlacksmithReporter {
 		const pending = ctx.pending
 		ctx.pending = null
 		if (!pending || !root) return
-		const { deps, global } = readPieces(root, ctx.repo)
+		const { deps, global, manifests } = readPieces(root, ctx.repo)
 		const run: RunRecord = {
 			at: Date.now(),
 			global,
@@ -113,6 +114,8 @@ export default class BlacksmithReporter {
 				}
 			}
 			const entry: FileRecord = { deps: [...(recorded ?? [])].sort(), tests }
+			const read = [...(manifests.get(file) ?? [])].sort()
+			if (read.length > 0) entry.manifests = read
 			if (failed) entry.failed = true
 			run.files[file] = entry
 		}
@@ -120,8 +123,17 @@ export default class BlacksmithReporter {
 		// stales every record: a file this run left out keeps none.
 		const always = new Set(alwaysPaths(ctx))
 		const staleAll = pending.changed.some((file) => always.has(file))
+		// The packages in `global` outlive it: with a warm transform cache this
+		// run did not load the transformer's packages, and a later one would.
+		const stored = readJson<Records>(recordsFile(ctx, pending.shard))
 		const merged = mergeRecords(
-			staleAll ? null : readJson<Records>(recordsFile(ctx, pending.shard)),
+			staleAll && stored
+				? {
+						...stored,
+						files: {},
+						global: (stored.global ?? []).filter(isPackagePath),
+					}
+				: stored,
 			run,
 			pending.changed,
 			ctx.options,
@@ -129,6 +141,9 @@ export default class BlacksmithReporter {
 		for (const spec of Object.keys(merged.files)) {
 			if (!existsSync(path.join(ctx.repo, spec))) delete merged.files[spec]
 		}
+		merged.global = merged.global.filter(
+			(file) => !isPackagePath(file) || existsSync(path.join(ctx.repo, file)),
+		)
 		const anchored = await writeRecords(ctx, pending.shard, merged)
 		const entries = Object.values(merged.files)
 		const vouched = entries.filter(
@@ -150,7 +165,12 @@ const TRANSFORM_CONFIG =
 function readPieces(
 	root: string,
 	repo: string,
-): { deps: Map<string, Set<string>>; global: string[] } {
+): {
+	deps: Map<string, Set<string>>
+	global: string[]
+	manifests: Map<string, Set<string>>
+} {
+	const manifests = new Map<string, Set<string>>()
 	const deps = new Map<string, Set<string>>()
 	const global = new Set<string>()
 	const isDirectory = (file: string): boolean =>
@@ -168,6 +188,9 @@ function readPieces(
 		const test = toRelative(repo, piece.test)
 		const files = deps.get(test) ?? new Set<string>()
 		deps.set(test, files)
+		const read = manifests.get(test) ?? new Set<string>()
+		manifests.set(test, read)
+		for (const file of piece.manifests ?? []) read.add(toRelative(repo, file))
 		// Jest's resolver asks about every directory on the way to a module:
 		// a file moving into one of them is no change to the test.
 		const probes = piece.probes.filter((file) => !isDirectory(file))
@@ -188,5 +211,5 @@ function readPieces(
 			if (line !== '') global.add(toRelative(repo, line))
 		}
 	}
-	return { deps, global: [...global].sort() }
+	return { deps, global: [...global].sort(), manifests }
 }

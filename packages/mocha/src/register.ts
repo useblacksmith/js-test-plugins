@@ -1,4 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import {
+	isPackagePath,
+	packageDir,
+	packageOf,
+	readDuringLoad,
+	repositoryPackage,
+} from '../../shared/src/packages.ts'
 import Module, { createRequire, syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
@@ -161,6 +168,11 @@ function install(): void {
 	const graph = new Map<string, Set<string>>()
 	const entries = new Set<string>()
 	const unattributed = new Set<string>()
+	// What loaded before the recorder: Mocha, and what its config required.
+	for (const file of Object.keys(require.cache)) {
+		const dir = repositoryPackage(repo, file)
+		if (dir !== null) unattributed.add(rel(dir))
+	}
 	/** Every repository file loaded as a module; Node's loaders read their source through the wrapped fs. */
 	const modules = new Set<string>()
 	const files = new Map<string, FileEntry>()
@@ -261,9 +273,32 @@ function install(): void {
 		}
 	}
 
+	/** The package.json files the command compares whatever the record says: the repository's and the working directory's. */
+	const ALWAYS_MANIFESTS = new Set([
+		path.join(repo, 'package.json'),
+		path.join(process.cwd(), 'package.json'),
+	])
+
+	/** Whether the read under way was made while a module loads (a loader such as ts-node or Babel), not by code a spec called. */
+	function readByPackage(): boolean {
+		return readDuringLoad(
+			(line) =>
+				line.includes(`${path.sep}shared${path.sep}src${path.sep}fs-recorder.`) ||
+				line.includes(`${path.sep}shared${path.sep}src${path.sep}packages.`) ||
+				line.includes(here),
+			(line) => line.includes('node:internal/modules'),
+		)
+	}
+
 	function read(file: string, content: boolean): void {
-		const absolute = path.resolve(file)
-		if (ignored(absolute) || !outputs.reads(absolute, content)) return
+		let absolute = path.resolve(file)
+		// A file of an installed package read as data: the package.
+		const installed = content ? packageOf(repo, absolute) : null
+		if (installed !== null) absolute = installed
+		else if (ignored(absolute) || !outputs.reads(absolute, content)) return
+		// A package.json every change of which is looked at anyway, read by a tool (Babel, browserslist) for a field
+		// of its own: its fields outside the dependencies rerun everything as it is.
+		if (ALWAYS_MANIFESTS.has(absolute) && readByPackage()) return
 		const to = target()
 		charge(to, absolute, content)
 		// A value read once and kept (a config loaded on first use) is never
@@ -283,6 +318,19 @@ function install(): void {
 
 	// ---- imports ----------------------------------------------------------
 	function noteLoad(from: string | undefined, to: string): void {
+		// An installed package stands for its files: whoever loads one of them
+		// depends on the package, and the package on the packages it loads.
+		if (isPackagePath(to)) {
+			const dir = repositoryPackage(repo, to)
+			const parent =
+				from === undefined
+					? loadStack.at(-1)
+					: isPackagePath(from)
+						? repositoryPackage(repo, from)
+						: from
+			if (dir !== null && parent && parent !== dir) addEdge(parent, dir)
+			return
+		}
 		if (ignored(to)) return
 		// A CommonJS module imported from ESM reaches `Module._load` with no
 		// parent; the resolve hook already saw its importer.
@@ -394,7 +442,12 @@ function install(): void {
 					continue
 				}
 				const absolute = path.resolve(child.cwd, line)
-				if (!ignored(absolute) && outputs.reads(absolute, true)) {
+				// The child reports a package it loaded or read by its directory.
+				if (
+					packageDir(absolute) === absolute
+						? packageOf(repo, absolute) !== null
+						: !ignored(absolute) && outputs.reads(absolute, true)
+				) {
 					charge(child.to, absolute)
 				}
 			}

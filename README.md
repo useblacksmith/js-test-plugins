@@ -29,7 +29,8 @@ pnpm test
 
 `packages/shared/test/scenarios.ts` lists the cases every plugin must pass: a
 small sample project, a real run of the test runner, a change (a source file,
-`package.json`, the lockfile, the workflow file, a new or failing test), and
+`package.json`, a new version of an installed package, the workflow file, a new
+or failing test), and
 which test files the next run executes. Each package's
 `test/scenarios.test.ts` runs the list with its own runner, once with the
 record on disk and once with the record travelling only through a cache. To

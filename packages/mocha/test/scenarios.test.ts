@@ -14,6 +14,10 @@ const driver: Driver = {
 	runner: 'mocha',
 	source: path.join(packageRoot, 'src', 'cli.ts'),
 	cacheDir: 'node_modules/.cache/blacksmith-mocha',
+	tracksPackages: true,
+	withTool: (_plugin, tool) => ({
+		'.mocharc.cjs': `require(${JSON.stringify(tool)})\nmodule.exports = {}\n`,
+	}),
 	config: () => ({}),
 	command(project, report) {
 		const plugin = path.join(project.cwd, 'node_modules/@useblacksmith/mocha')
