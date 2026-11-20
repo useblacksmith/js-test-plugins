@@ -140,9 +140,11 @@ function bound(pattern: Node | null, names: string[]): string[] {
 /**
  * `null` for a file whose changes cannot be attributed to anything smaller
  * than the file: not JavaScript or TypeScript, unparsable, CommonJS, or
- * already using the instrumentation's names.
+ * already using the instrumentation's names. With `key` the marks report to
+ * the function `installHit` leaves on `globalThis`, as `globalFooter(key)`
+ * does; without, to the one `footer` declares in the module.
  */
-export function analyze(code: string, file: string): Analysis | null {
+export function analyze(code: string, file: string, key?: string): Analysis | null {
 	const language = lang(file)
 	if (!language || code.includes(HIT)) return null
 	let program: Node
@@ -300,8 +302,12 @@ export function analyze(code: string, file: string): Analysis | null {
 
 	const mark = (name: string, fn: Node): void => {
 		const body = fn.body as Node
-		// Guarded: a function's text may be run somewhere else (`fn.toString()` into an inline script).
-		const call = `typeof ${HIT}=="function"&&${HIT}(${JSON.stringify(name)})`
+		// A function's text may be run somewhere else (`fn.toString()` into an inline script),
+		// where the call must do nothing. With a `key` it names nothing of the module's.
+		const call =
+			key === undefined
+				? `typeof ${HIT}=="function"&&${HIT}(${JSON.stringify(name)})`
+				: `globalThis.${HIT}?.(${JSON.stringify(key)},${JSON.stringify(name)})`
 		if (body.type !== 'BlockStatement' && body.type !== 'FunctionBody') {
 			marks.push([body.start, `(${call},`], [body.end, ')'])
 			return
@@ -566,4 +572,13 @@ export function footer(key: string, typed = false): string {
 	const table = `${HIT}_t`
 	// Two semicolons: a transformer may take the first as the end of the statement before and write after it.
 	return `\n;;var ${table}=Function("return")();function ${HIT}(n=""){(${table}??=((Function("return this")().${HITS}??={})[${JSON.stringify(key)}]??={}))[n]=1}${loaded}`
+}
+
+/**
+ * What a module marked with a `key` ends with. Nothing in it or in the marks
+ * belongs to the module, so a transformer that knows the module's
+ * declarations cannot simplify a mark into one that only runs inside it.
+ */
+export function globalFooter(key: string): string {
+	return `\n;globalThis.${HIT}?.(${JSON.stringify(key)},${JSON.stringify(LOADED)});`
 }

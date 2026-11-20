@@ -22,7 +22,7 @@ import {
 	workerRecordPath,
 	wrapFs,
 } from '../../shared/src/fs-recorder.ts'
-import { HITS, LOADED } from '../../shared/src/hits.ts'
+import { HITS, installHit, LOADED } from '../../shared/src/hits.ts'
 import { isPackagePath, packageOf } from '../../shared/src/packages.ts'
 
 /**
@@ -446,6 +446,9 @@ function collect(child: Child): void {
 	recordReported(child)
 	outstanding().delete(child)
 }
+
+// Before the test file loads anything: every marked module calls this.
+installHit()
 
 // Vitest ships the test file's dependency set as soon as its hooks are done,
 // so a child still running then (a server the test tears down, a worker it

@@ -76,7 +76,7 @@ A change to a file does not rerun every test file that loaded it. The plugin rec
 
 A value built from a changed one counts as changed, and a function that mentions a changed value reruns the test files that called it. Files the plugin cannot take apart (CommonJS, files using `eval`, anything that is not JavaScript or TypeScript) and test files run in browser mode rerun for any change to a file they loaded, as does a run with `sequence.hooks` set to anything but `'stack'`.
 
-To record function entries the plugin adds one call at the start of each top-level function while Vite transforms the module; source maps account for it. The call does nothing outside its module, so a function turned into text with `toString()` still runs wherever that text is evaluated. The record is kept beside the dependency record and travels with it.
+To record function entries the plugin adds one call at the start of each top-level function while Vite transforms the module; source maps account for it. The call names nothing of the module's and does nothing where the plugin is not recording, so a function turned into text with `toString()` still runs wherever that text is evaluated. The record is kept beside the dependency record and travels with it.
 
 What narrowing cannot see: a test whose result depends on a function's source text or `length` rather than on calling it, and a module whose top-level value is there only for the side effects of evaluating it while something else exports or mentions that value.
 
