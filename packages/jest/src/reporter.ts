@@ -13,6 +13,8 @@ import {
 	type Records,
 	type RunRecord,
 	type TestState,
+	loadRecords,
+	type StoredRecords,
 } from './core.ts'
 import {
 	alwaysPaths,
@@ -131,7 +133,7 @@ export default class BlacksmithReporter {
 		const staleAll = pending.changed.some((file) => always.has(file))
 		// The packages in `global` outlive it: with a warm transform cache this
 		// run did not load the transformer's packages, and a later one would.
-		const stored = readJson<Records>(recordsFile(ctx, pending.shard))
+		const stored = loadRecords(readJson<StoredRecords | Records>(recordsFile(ctx, pending.shard)))
 		const merged = mergeRecords(
 			staleAll && stored
 				? {

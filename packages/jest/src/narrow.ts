@@ -19,7 +19,7 @@ import { dataDir, suffix, type Resolve, type Shard, type State } from './state.t
  * each module was made of when the tests last ran against it, and which of
  * its functions each test file entered.
  */
-const UNITS_VERSION = 1
+const UNITS_VERSION = 2
 const CODE = /\.[cm]?[jt]sx?$/
 
 interface Units {
@@ -37,9 +37,74 @@ export const unitsFile = (ctx: State, shard: Shard | null): string =>
 	path.join(dataDir(ctx.cwd), `units${suffix(shard)}.json`)
 
 function readUnits(ctx: State, shard: Shard | null, records: Records | null): Units | null {
-	const units = readJson<Units>(unitsFile(ctx, shard))
-	if (units?.version !== UNITS_VERSION || !records || units.at !== records.at) return null
+	const units = loadUnits(readJson<StoredUnits | LegacyUnits>(unitsFile(ctx, shard)))
+	if (!units || !records || units.at !== records.at) return null
 	return units
+}
+
+/** The layout before this one: `tests` named each module and its functions under every test file. */
+type LegacyUnits = Omit<Units, 'version'> & { version: 1 }
+
+/**
+ * The record as the file holds it. Most test files enter the same functions
+ * of the same modules, so `hits` holds each module with a list of functions
+ * once, as a position in `paths` followed by the names, and a test file is a
+ * list of positions in `hits`.
+ */
+interface StoredUnits extends Omit<Units, 'tests'> {
+	paths: string[]
+	hits: [number, ...string[]][]
+	tests: Record<string, number[]>
+}
+
+export function storeUnits(units: Units): StoredUnits {
+	const paths: string[] = []
+	const pathAt = new Map<string, number>()
+	const hits: StoredUnits['hits'] = []
+	const hitAt = new Map<string, number>()
+	const tests: StoredUnits['tests'] = {}
+	for (const [spec, modules] of Object.entries(units.tests)) {
+		tests[spec] = Object.entries(modules).map(([module, entered]) => {
+			const key = JSON.stringify([module, entered])
+			let hit = hitAt.get(key)
+			if (hit === undefined) {
+				let at = pathAt.get(module)
+				if (at === undefined) {
+					at = paths.length
+					pathAt.set(module, at)
+					paths.push(module)
+				}
+				hit = hits.length
+				hitAt.set(key, hit)
+				hits.push([at, ...entered])
+			}
+			return hit
+		})
+	}
+	return { ...units, paths, hits, tests }
+}
+
+export function loadUnits(stored: StoredUnits | LegacyUnits | null): Units | null {
+	if (stored === null || typeof stored !== 'object') return null
+	if (stored.version === 1 && !('hits' in stored)) return { ...stored, version: UNITS_VERSION }
+	if (stored.version !== UNITS_VERSION || !('hits' in stored)) return null
+	try {
+		const { paths, hits, tests: positions, ...rest } = stored
+		const tests: Units['tests'] = {}
+		for (const [spec, list] of Object.entries(positions)) {
+			const modules: Record<string, string[]> = {}
+			for (const position of list) {
+				const hit = hits[position]
+				const module = hit === undefined ? undefined : paths[hit[0]]
+				if (hit === undefined || typeof module !== 'string') throw new Error('not a function record')
+				modules[module] = hit.slice(1) as string[]
+			}
+			tests[spec] = modules
+		}
+		return { ...rest, tests }
+	} catch {
+		return null
+	}
 }
 
 function digestOf(
@@ -167,7 +232,7 @@ export function updateUnits(
 		else delete units.modules[module]
 	}
 	units.at = records.at
-	writeFileSync(unitsFile(ctx, shard), JSON.stringify(units))
+	writeFileSync(unitsFile(ctx, shard), JSON.stringify(storeUnits(units)))
 }
 
 /** A run without `narrow` leaves no function record: the one before it is not of the tests it ran. */

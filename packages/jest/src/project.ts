@@ -28,6 +28,7 @@ import {
 	readManifests,
 	recordedPaths,
 	ruleGlobs,
+	storeRecords,
 	type Records,
 } from './core.ts'
 import { dataDir, log, suffix, type Shard, type State } from './state.ts'
@@ -141,7 +142,7 @@ export async function writeRecords(
 ): Promise<number> {
 	const tree = await currentTree(ctx, recordedPaths(records), readManifests(records))
 	mkdirSync(dataDir(ctx.cwd), { recursive: true })
-	writeFileSync(recordsFile(ctx, shard), JSON.stringify(records))
+	writeFileSync(recordsFile(ctx, shard), JSON.stringify(storeRecords(records)))
 	writeFileSync(
 		anchorFile(ctx, shard),
 		JSON.stringify({ tree } satisfies Anchor),
