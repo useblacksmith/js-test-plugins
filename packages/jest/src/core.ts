@@ -43,11 +43,6 @@ export interface Records {
 export type Affects = (spec: string, file: string) => boolean
 
 export interface Options {
-	/**
-	 * Experimental. Look inside a changed file instead of rerunning every test
-	 * file that loaded it.
-	 */
-	narrow?: boolean
 	/** Test file glob → globs of files those test files depend on that nothing reads. */
 	dependencies?: Record<string, string | string[]>
 }

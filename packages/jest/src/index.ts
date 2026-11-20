@@ -57,7 +57,7 @@ function apply(config: JestConfig, options: Options): JestConfig {
 			/^--(coverage|collectCoverage)($|=(?!false$))/.test(arg),
 		)
 	// Coverage runs every test file, and counts the marks as code.
-	ctx.narrow = options.narrow === true && !ctx.coverage
+	ctx.narrow = !ctx.coverage
 	if (ctx.narrow) process.env[ENV_NARROW] = '1'
 	else delete process.env[ENV_NARROW]
 	process.env[ENV_REPO] = ctx.repo

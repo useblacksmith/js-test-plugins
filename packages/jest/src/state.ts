@@ -51,7 +51,7 @@ export interface State {
 	coverage: boolean
 	shard: Shard | null
 	pending: Pending | null
-	/** Whether the run looks into changed files (`narrow`). */
+	/** Whether the run looks into changed files. */
 	narrow: boolean
 	/** Resolves a specifier from a file the way one of the run's projects does. */
 	resolve: Resolve

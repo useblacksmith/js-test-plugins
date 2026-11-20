@@ -77,11 +77,9 @@ for (const [mode, args] of [
 			assert.deepEqual(run(), ['capped'])
 		})
 
-		test('a run without the option forgets what the test files entered', () => {
-			repo.env = { NARROW: '0' }
+		test('a run with coverage forgets what the test files entered', () => {
 			edit('src/math.js', 'return a + b', 'return b + a')
-			assert.deepEqual(run(), ALL)
-			repo.env = {}
+			assert.deepEqual(run('--coverage=true'), ALL)
 			edit('src/math.js', 'return b + a', 'return a + b')
 			assert.deepEqual(run(), ALL)
 			edit('src/math.js', 'return a + b', 'return b + a')
@@ -98,7 +96,7 @@ describe('a test file two projects run', () => {
 			`{ displayName: '${name}', rootDir: __dirname, testMatch: ['**/test/which.test.js'], transform: { '\\\\.js$': '<rootDir>/esm-transformer.js' }, moduleNameMapper: { '^lib$': '<rootDir>/src/lib-${name}.js' } }`
 		repo.write(
 			'jest.config.js',
-			`const { withBlacksmith } = require(process.env.BLACKSMITH_JEST_ENTRY)\nmodule.exports = withBlacksmith({ projects: [${project('a')}, ${project('b')}] }, { narrow: true })\n`,
+			`const { withBlacksmith } = require(process.env.BLACKSMITH_JEST_ENTRY)\nmodule.exports = withBlacksmith({ projects: [${project('a')}, ${project('b')}] })\n`,
 		)
 		repo.write('src/lib-a.js', 'export const which = () => 1\n')
 		repo.write('src/lib-b.js', 'export const which = () => 1\n')
