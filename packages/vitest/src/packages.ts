@@ -75,8 +75,26 @@ function localFile(from: string, specifier: string): string | null {
 	return null
 }
 
+type Alias = { find: string | RegExp; replacement: string }
+
+/** `specifier` as the first of `aliases` that matches rewrites it, as Vite does. */
+function aliased(specifier: string, aliases: readonly Alias[]): string {
+	for (const { find, replacement } of aliases) {
+		if (typeof find !== 'string') {
+			if (find.test(specifier)) return specifier.replace(find, replacement)
+		} else if (specifier === find || specifier.startsWith(`${find}/`)) {
+			return replacement + specifier.slice(find.length)
+		}
+	}
+	return specifier
+}
+
 /** The packages the source file `file` names in its imports, and those the files of the repository it imports name. */
-function importedPackages(file: string, seen = new Set<string>()): string[] {
+function importedPackages(
+	file: string,
+	aliases: readonly Alias[],
+	seen = new Set<string>(),
+): string[] {
 	if (seen.has(file)) return []
 	seen.add(file)
 	let source: string
@@ -86,11 +104,12 @@ function importedPackages(file: string, seen = new Set<string>()): string[] {
 		return []
 	}
 	const found: string[] = []
-	for (const [, specifier] of source.matchAll(SPECIFIER)) {
-		if (specifier?.startsWith('.')) {
+	for (const [, written] of source.matchAll(SPECIFIER)) {
+		const specifier = written && aliased(written, aliases)
+		if (specifier?.startsWith('.') || (specifier && path.isAbsolute(specifier))) {
 			const local = localFile(file, specifier)
 			if (local && packageDir(local) === null) {
-				found.push(...importedPackages(local, seen))
+				found.push(...importedPackages(local, aliases, seen))
 			}
 			continue
 		}
@@ -114,17 +133,20 @@ export function globalPackages(vitest: Vitest, repo: string): string[] {
 	const queue: string[] = []
 	const own = findPackage(vitest.config.root, 'vitest')
 	if (own) queue.push(own)
-	const sources = new Set<string>()
+	const sources = new Map<string, readonly Alias[]>()
 	for (const project of [vitest.getRootProject(), ...vitest.projects]) {
 		const config = project.vite.config
-		if (config.configFile) sources.add(config.configFile)
-		for (const file of config.configFileDependencies) sources.add(file)
-		for (const file of project.config.globalSetup) sources.add(file)
+		// A config file is loaded before its aliases exist; globalSetup after.
+		if (config.configFile) sources.set(config.configFile, [])
+		for (const file of config.configFileDependencies) sources.set(file, [])
+		for (const file of project.config.globalSetup) {
+			sources.set(file, config.resolve.alias)
+		}
 	}
-	for (const file of sources) {
+	for (const [file, aliases] of sources) {
 		// A config or globalSetup file that is itself part of an installed package.
 		const installed = packageDir(file)
-		if (installed === null) queue.push(...importedPackages(file))
+		if (installed === null) queue.push(...importedPackages(file, aliases))
 		else queue.push(installed)
 	}
 	const seen = new Set<string>()
