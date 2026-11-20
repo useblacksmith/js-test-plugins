@@ -292,6 +292,16 @@ describe('narrow: module digests', () => {
 		expect(analysis?.marks.map(([, text]) => text[0])).toEqual([';'])
 	})
 
+	test("a marked function's text runs outside its module", () => {
+		const code = 'export function f() {\n\treturn 1\n}\nexport const g = () => 2'
+		let marked = code
+		for (const [at, text] of [...(analyze(code, 'a.js')?.marks ?? [])].sort((a, b) => b[0] - a[0])) {
+			marked = marked.slice(0, at) + text + marked.slice(at)
+		}
+		const body = marked.replace(/export /g, '')
+		expect(new Function(`${body}\nreturn [f(), g()]`)()).toEqual([1, 2])
+	})
+
 	test('a declaration named like an inherited property', () => {
 		const names = Object.keys(
 			digest('export const toString = 1\nexport function constructor() {}').units,

@@ -273,7 +273,8 @@ export function analyze(code: string, file: string): Analysis | null {
 
 	const mark = (name: string, fn: Node): void => {
 		const body = fn.body as Node
-		const call = `${HIT}(${JSON.stringify(name)})`
+		// Guarded: a function's text may be run somewhere else (`fn.toString()` into an inline script).
+		const call = `typeof ${HIT}=="function"&&${HIT}(${JSON.stringify(name)})`
 		if (body.type !== 'BlockStatement' && body.type !== 'FunctionBody') {
 			marks.push([body.start, `(${call},`], [body.end, ')'])
 			return
