@@ -70,13 +70,13 @@ A change to a file does not rerun every test file that loaded it. The plugin rec
 | --- | --- |
 | The body of a top-level function (`function f() {}`, `const f = () => {}`) | Those that called the function |
 | Another top-level declaration (a constant, a class, an enum), or a function's parameter list | Those that loaded a module importing it by name, through re-exports too. A namespace import, a dynamic `import()` or a mock of the module counts as importing every name |
-| Types, comments, or a new declaration nothing uses yet | None |
+| Types, comments, or a new declaration nothing uses yet | None. A type annotation inside a class that has a decorator is not a type here: emitted decorator metadata makes it a value, so it counts as a change to the class |
 | A new import | Those that had not loaded the imported module |
 | Any other top-level statement, an `export *`, or declarations that changed places | All that loaded the file |
 
 A value built from a changed one counts as changed, and a function that mentions a changed value reruns the test files that called it. Files the plugin cannot take apart (CommonJS, files using `eval`, anything that is not JavaScript or TypeScript) and test files run in browser mode rerun for any change to a file they loaded, as does a run with `sequence.hooks` set to anything but `'stack'`.
 
-To record function entries the plugin adds one call at the start of each top-level function while Vite transforms the module; source maps account for it. The record is kept beside the dependency record and travels with it.
+To record function entries the plugin adds one call at the start of each top-level function while Vite transforms the module; source maps account for it. The call does nothing outside its module, so a function turned into text with `toString()` still runs wherever that text is evaluated. The record is kept beside the dependency record and travels with it.
 
 What narrowing cannot see: a test whose result depends on a function's source text or `length` rather than on calling it, and a module whose top-level value is there only for the side effects of evaluating it while something else exports or mentions that value.
 
