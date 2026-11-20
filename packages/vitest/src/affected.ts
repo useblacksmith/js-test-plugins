@@ -773,14 +773,18 @@ export class TreeSnapshotProvider {
 			}
 		}
 		// A test file reruns with a package it loaded. One without a list of
-		// packages (browser mode, where Vite bundles them) reruns with the lockfile.
+		// packages (browser mode, where Vite bundles them), or with one that
+		// misses some, reruns with the lockfile.
+		const incomplete = new Set(packages?.incomplete ?? [])
 		let viaPackages = 0
 		if (changedPackages.size > 0 || lockfile) {
 			for (const [test] of await recordedDependencies(this.vitest, dir)) {
 				if (changed.has(test) || !owns(test)) continue
-				const loaded = packages?.files[repoRelative(repo, test)]
+				const relative = repoRelative(repo, test)
+				const loaded = packages?.files[relative]
 				if (
-					loaded ? loaded.some((dir) => changedPackages.has(dir)) : lockfile
+					loaded?.some((dir) => changedPackages.has(dir)) ||
+					(lockfile && (!loaded || incomplete.has(relative)))
 				) {
 					changed.add(test)
 					viaPackages++
@@ -1202,6 +1206,9 @@ export class SnapshotRecorder implements Reporter {
 			this.vitest.vite.config.cacheDir,
 			process.env[ENV_RECORD_ROOT],
 			cut || modules.some((module) => containsOnly(module)),
+			modules
+				.filter((module) => module.project.config.browser.enabled)
+				.map((module) => module.moduleId),
 		)
 		await this.reportFiltered()
 		// A failed run still vouches for the files that passed; the failed ones

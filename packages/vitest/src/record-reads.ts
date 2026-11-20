@@ -609,6 +609,8 @@ function writePendingPackages(): void {
 				test: last.test,
 				project: last.project,
 				packages: loadedPackages(last),
+				// Without synchronous hooks an ES module's loads go unseen.
+				incomplete: !('registerHooks' in require('node:module')),
 			}),
 		)
 		fs.renameSync(partial, last.file)

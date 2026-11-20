@@ -21,6 +21,8 @@ export interface PackageRecords {
 	files: Record<string, string[]>
 	/** Packages the run itself loads (Vitest, Vite, what the config files import, and what those depend on): a change reruns everything. */
 	global: string[]
+	/** Test files whose list misses packages (a browser project ran them, or the Node could not see ES module loads): they rerun with the lockfile too. */
+	incomplete?: string[]
 }
 
 function relative(repo: string, file: string): string | null {
@@ -166,6 +168,7 @@ export function globalPackages(vitest: Vitest, repo: string): string[] {
  * Merges what the workers left under `recordRoot` for the test files of this
  * run into the record in `dir`. A test file two projects ran keeps the
  * packages of both, and one run in part (`partial`) those it had; one that no longer exists is dropped.
+ * `bundled` are the test files a browser project ran.
  */
 export async function updatePackages(
 	vitest: Vitest,
@@ -173,6 +176,7 @@ export async function updatePackages(
 	dir: string,
 	recordRoot: string | undefined,
 	partial: boolean,
+	bundled: readonly string[],
 ): Promise<void> {
 	const records = (await readPackages(dir)) ?? {
 		version: PACKAGES_VERSION,
@@ -180,6 +184,11 @@ export async function updatePackages(
 		global: [],
 	}
 	const fresh = new Map<string, Set<string>>()
+	const unseen = new Set<string>()
+	for (const file of bundled) {
+		const test = relative(repo, file)
+		if (test !== null) unseen.add(test)
+	}
 	const pieces = recordRoot ? path.join(recordRoot, 'deps') : null
 	let names: string[] = []
 	try {
@@ -192,9 +201,11 @@ export async function updatePackages(
 			const piece = JSON.parse(await readFile(file, 'utf8')) as {
 				test: string
 				packages: string[]
+				incomplete?: boolean
 			}
 			const test = relative(repo, piece.test)
 			if (test !== null) {
+				if (piece.incomplete) unseen.add(test)
 				let dirs = fresh.get(test)
 				if (!dirs) fresh.set(test, (dirs = new Set()))
 				for (const loaded of piece.packages) {
@@ -218,6 +229,14 @@ export async function updatePackages(
 	for (const test of Object.keys(records.files)) {
 		if (!existsSync(path.join(repo, test))) delete records.files[test]
 	}
+	// A narrowed run did not see what the other projects make of a test file.
+	const incomplete = new Set(unseen)
+	for (const test of records.incomplete ?? []) {
+		if ((narrowed || !fresh.has(test)) && existsSync(path.join(repo, test))) {
+			incomplete.add(test)
+		}
+	}
+	records.incomplete = [...incomplete].sort()
 	// The other projects' config and globalSetup files were not loaded by a narrowed run.
 	const global = new Set(globalPackages(vitest, repo))
 	if (narrowed) {
