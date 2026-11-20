@@ -387,7 +387,9 @@ export function analyze(code: string, file: string): Analysis | null {
 					if (node.source) reexports[name] = [node.source.value, local]
 					else exports[name] = local
 				}
-				if (node.source) rest.push(`export from ${node.source.value}`)
+				if (node.source && node.exportKind !== 'type' && kept) {
+					rest.push(`export from ${node.source.value}`)
+				}
 				break
 			}
 			case 'ExportDefaultDeclaration': {

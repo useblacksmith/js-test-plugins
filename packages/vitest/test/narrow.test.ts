@@ -275,6 +275,7 @@ describe('narrow: module digests', () => {
 	test('a re-export TypeScript drops is not a module the file loads', () => {
 		const before = digest("export { type T } from './types.ts'\nexport const a = 1")
 		expect(before.sources).toEqual([])
+		expect(difference(digest('export const a = 1'), before)).toBeNull()
 		const after = digest("export { type T } from './types.ts'\nimport './types.ts'\nexport const a = 1")
 		expect(difference(before, after)).toMatchObject({ added: ['?./types.ts'] })
 	})
