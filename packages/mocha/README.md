@@ -104,8 +104,10 @@ Globs are relative to the repository root.
   one file share a record.
 - A package is known by its directory and version. Not seen: a package
   changed in place at the same version (`patch-package`, a git or `file:`
-  dependency), a package installed outside the repository, and a newly
-  installed copy that shadows the one a spec file loaded before.
+  dependency) and a package installed outside the repository.
+  A copy installed later in front of the one a spec file loaded (inside a
+  workspace, as Yarn and npm do for a version that differs from the hoisted
+  one, or inside the package that loads it) counts as a change.
   With pnpm, which links each name to one of the versions it keeps side by
   side, a package also counts as changed when a link that led to it now leads
   to another version.

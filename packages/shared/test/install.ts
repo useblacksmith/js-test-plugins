@@ -16,22 +16,29 @@ import type { Driver, Project } from './project.ts'
 import type { Case } from './scenarios.ts'
 
 /**
- * A pnpm workspace installed by pnpm itself: two workspaces on two versions
- * of one package, which pnpm keeps side by side and links to by name. Needs
- * the packed plugin (BLACKSMITH_E2E_TARBALL) and the registry.
+ * Workspaces installed by the package manager itself: two workspaces that
+ * load one package. pnpm keeps two versions side by side and links to them
+ * by name; Yarn hoists one copy to the root and installs another version
+ * inside the workspace that asks for it. Needs the packed plugin
+ * (BLACKSMITH_E2E_TARBALL) and the registry.
  */
+
+type Manager = 'pnpm' | 'yarn'
+const YARN = 'yarn@1.22.22'
 
 const PACKAGE = 'left-pad'
 const OLD = '1.2.0'
 const NEW = '1.3.0'
 
 class Workspace {
-	readonly cwd = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'bsm-pnpm-')))
+	readonly cwd = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'bsm-install-')))
 	private readonly driver: Driver
+	private readonly manager: Manager
 	private runs = 0
 
-	constructor(driver: Driver, tarball: string) {
+	constructor(driver: Driver, tarball: string, manager: Manager = 'pnpm') {
 		this.driver = driver
+		this.manager = manager
 		const own = JSON.parse(
 			readFileSync(path.join(driver.packageRoot, 'package.json'), 'utf8'),
 		) as { devDependencies: Record<string, string> }
@@ -43,13 +50,26 @@ class Workspace {
 			'package.json': JSON.stringify({
 				name: 'sample',
 				private: true,
-				packageManager: root.packageManager,
+				...(manager === 'pnpm'
+					? { packageManager: root.packageManager }
+					: {
+							packageManager: YARN,
+							workspaces: ['packages/*'],
+							// The copy at the root stays on this version whatever a workspace asks for.
+							dependencies: { [PACKAGE]: NEW },
+						}),
 				devDependencies: {
 					[driver.runner]: own.devDependencies[driver.runner],
+					// Yarn installs no peer of the runner by itself.
+					...(manager === 'yarn' && own.devDependencies.vite
+						? { vite: own.devDependencies.vite }
+						: {}),
 					[`@useblacksmith/${driver.name}`]: `file:${path.resolve(tarball)}`,
 				},
 			}),
-			'pnpm-workspace.yaml': 'packages:\n  - packages/*\n',
+			...(manager === 'pnpm'
+				? { 'pnpm-workspace.yaml': 'packages:\n  - packages/*\n' }
+				: {}),
 			'.gitignore': 'node_modules\n',
 			...driver.config(`@useblacksmith/${driver.name}`),
 		}
@@ -68,7 +88,7 @@ class Workspace {
 			].join('\n')
 		}
 		for (const [file, content] of Object.entries(files)) this.write(file, content)
-		this.use('a', OLD)
+		this.use('a', manager === 'pnpm' ? OLD : NEW)
 		this.use('b', NEW)
 		this.git('init', '-q', '-b', 'main')
 	}
@@ -91,6 +111,8 @@ class Workspace {
 			`packages/${workspace}/package.json`,
 			JSON.stringify({
 				name: workspace,
+				// Yarn takes no workspace without one.
+				version: '1.0.0',
 				private: true,
 				dependencies: { [PACKAGE]: version },
 			}),
@@ -100,7 +122,8 @@ class Workspace {
 	/** Puts `workspace` on `version` (all workspaces as they are, without one), installs and commits. */
 	install(workspace?: string, version?: string): void {
 		if (workspace && version) this.use(workspace, version)
-		execFileSync('pnpm', ['install', '--no-frozen-lockfile'], {
+		const args = this.manager === 'pnpm' ? ['--no-frozen-lockfile'] : ['--no-progress']
+		execFileSync(this.manager, ['install', ...args], {
 			cwd: this.cwd,
 			stdio: 'pipe',
 			env: { ...process.env, CI: 'true' },
@@ -141,13 +164,20 @@ class Workspace {
 		return [...new Set(files.map((file) => path.basename(file, '.test.js')))].sort()
 	}
 
+	/** Whether `workspace` has a copy of the package of its own. */
+	nested(workspace: string): boolean {
+		return existsSync(
+			path.join(this.cwd, 'packages', workspace, 'node_modules', PACKAGE, 'package.json'),
+		)
+	}
+
 	cleanup(): void {
 		rmSync(this.cwd, { recursive: true, force: true })
 	}
 }
 
 /** The cases to register for `driver`: none without the packed plugin. */
-export function pnpmCases(driver: Driver): Case[] {
+export function installCases(driver: Driver): Case[] {
 	const tarball = process.env.BLACKSMITH_E2E_TARBALL
 	if (!tarball || !driver.tracksPackages) return []
 	return [
@@ -166,6 +196,29 @@ export function pnpmCases(driver: Driver): Case[] {
 					assert.deepEqual(workspace.run(), [])
 					workspace.install('a', OLD)
 					assert.ok(workspace.stored(), 'both versions stay in the store')
+					assert.deepEqual(workspace.run(), ['a'])
+					assert.deepEqual(workspace.run(), [])
+				} finally {
+					workspace.cleanup()
+				}
+			},
+		},
+		{
+			name: 'yarn install: a workspace moved to a version installed inside it, and back to the one at the root, reruns its test files only',
+			async run() {
+				const workspace = new Workspace(driver, tarball, 'yarn')
+				try {
+					workspace.install()
+					assert.ok(!workspace.nested('a'), 'both workspaces load the copy at the root')
+					assert.deepEqual(workspace.run(), ['a', 'b'])
+					assert.deepEqual(workspace.run(), [])
+					// The copy at the root stays as it is: one is added in front of it.
+					workspace.install('a', OLD)
+					assert.ok(workspace.nested('a'), 'the workspace has a copy of its own')
+					assert.deepEqual(workspace.run(), ['a'])
+					assert.deepEqual(workspace.run(), [])
+					workspace.install('a', NEW)
+					assert.ok(!workspace.nested('a'), 'the copy of its own is gone')
 					assert.deepEqual(workspace.run(), ['a'])
 					assert.deepEqual(workspace.run(), [])
 				} finally {

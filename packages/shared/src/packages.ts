@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFileSync, readdirSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 
 /**
@@ -47,6 +47,7 @@ const STORE_ENTRY = /^((?:.*\/)?node_modules)\/\.pnpm\/[^/]+\/node_modules(?=\/)
 export class PackageLinks {
 	private readonly root: string
 	private readonly listed = new Map<string, Map<string, string>>()
+	private readonly manifests = new Map<string, boolean>()
 
 	constructor(repo: string) {
 		try {
@@ -92,41 +93,111 @@ export class PackageLinks {
 		return links
 	}
 
+	/** Whether the repository directory `dir` (`.` for its root) holds a package.json, as a directory packages are installed beside does. */
+	private manifest(dir: string): boolean {
+		let known = this.manifests.get(dir)
+		if (known === undefined) {
+			known = existsSync(path.join(this.root, dir, 'package.json'))
+			this.manifests.set(dir, known)
+		}
+		return known
+	}
+
 	/**
 	 * `paths` (repository-relative files and package directories) with the
 	 * links that lead to its packages: those beside the packages it holds and
 	 * beside the packages in `files`, and those in the node_modules
 	 * directories above its files and above the other `files`.
+	 *
+	 * And with the node_modules directories a copy installed later would be
+	 * found in first: one between a file, or a package, and a package found
+	 * further up. Such a directory stands by the names installed in it.
 	 */
 	expand(paths: Iterable<string>, files: Iterable<string> = []): string[] {
 		const all = new Set(paths)
 		const packages = [...all].filter(isPackagePath)
-		if (!packages.some((dir) => STORE_ENTRY.test(dir))) return [...all].sort()
+		if (packages.length === 0) return [...all].sort()
 		const bases = new Set<string>()
-		const importers = [...files].filter(isPackagePath)
-		for (const dir of [...packages, ...importers]) {
-			const entry = STORE_ENTRY.exec(dir)
-			if (!entry) continue
-			bases.add(entry[0])
-			bases.add(`${entry[1]}/.pnpm/node_modules`)
-			bases.add(entry[1] as string)
-		}
-		for (const file of [...all, ...files]) {
-			if (isPackagePath(file)) continue
-			let dir = path.posix.dirname(file)
+		// Directories a package is looked up from, nearest first: `.` is the repository's.
+		const above = new Set<string>()
+		const climb = (from: string) => {
+			let dir = from
 			while (true) {
-				bases.add(dir === '.' ? 'node_modules' : `${dir}/node_modules`)
+				if (above.has(dir)) break
+				above.add(dir)
 				if (dir === '.' || dir === '/') break
 				dir = path.posix.dirname(dir)
 			}
 		}
-		for (const base of bases) {
-			for (const [link, real] of this.list(base)) {
-				if (all.has(real)) all.add(link)
+		if (packages.some((dir) => STORE_ENTRY.test(dir))) {
+			const importers = [...files].filter(isPackagePath)
+			for (const dir of [...packages, ...importers]) {
+				const entry = STORE_ENTRY.exec(dir)
+				if (!entry) continue
+				bases.add(entry[0])
+				bases.add(`${entry[1]}/.pnpm/node_modules`)
+				bases.add(entry[1] as string)
+			}
+		}
+		for (const file of [...all, ...files]) {
+			if (!isPackagePath(file)) climb(path.posix.dirname(file))
+		}
+		for (const dir of above) {
+			bases.add(dir === '.' ? 'node_modules' : `${dir}/node_modules`)
+		}
+		if (bases.size > 0 && packages.some((dir) => STORE_ENTRY.test(dir))) {
+			for (const base of bases) {
+				for (const [link, real] of this.list(base)) {
+					if (all.has(real)) all.add(link)
+				}
+			}
+		}
+		// Where each package was found: the directory its node_modules is in, with the names found there.
+		const found = new Map<string, string[]>()
+		for (const dir of all) {
+			if (!isPackagePath(dir) || STORE_ENTRY.test(dir)) continue
+			const at = dir.lastIndexOf('/node_modules/')
+			const base = at === -1 ? '.' : dir.slice(0, at)
+			const name = dir.slice(dir.lastIndexOf('node_modules/') + 13)
+			if (dir.endsWith('/node_modules') || dir === 'node_modules') continue
+			let names = found.get(base)
+			if (!names) found.set(base, (names = []))
+			names.push(name)
+			// A package installed in a workspace looks further up from there.
+			if (!isPackagePath(base)) climb(base)
+		}
+		for (const dir of above) {
+			if (dir === '.' || !this.manifest(dir)) continue
+			const modules = `${dir}/node_modules`
+			for (const [base, names] of found) {
+				if (base !== '.' && !dir.startsWith(`${base}/`)) continue
+				if (names.some((name) => !all.has(`${modules}/${name}`))) {
+					all.add(modules)
+					break
+				}
 			}
 		}
 		return [...all].sort()
 	}
+}
+
+/** The names of the packages installed in the node_modules directory `dir`; null when there is none. */
+function installed(dir: string): string | null {
+	const names: string[] = []
+	const entries = (at: string): string[] => {
+		try {
+			return readdirSync(at)
+		} catch {
+			return []
+		}
+	}
+	for (const name of entries(dir)) {
+		if (name.startsWith('.')) continue
+		if (!name.startsWith('@')) names.push(name)
+		else for (const scoped of entries(path.join(dir, name))) names.push(`${name}/${scoped}`)
+	}
+	if (names.length === 0) return null
+	return createHash('sha1').update(names.sort().join('\0')).digest('hex')
 }
 
 /** The pnpm store entry behind the link at `dir`, so that another build of one version (other peers) is another package. */
@@ -141,13 +212,23 @@ function storeEntry(dir: string): string {
 	}
 }
 
-/** What stands in the anchor for the package installed at `dir`; null when none is. */
+/**
+ * What stands in the anchor for the package installed at `dir`: its version,
+ * and the names of the packages installed inside it, which it loads before
+ * any copy further up. For a node_modules directory, the names installed in
+ * it. Null when nothing is installed there.
+ */
 export function packageVersion(dir: string): string | null {
+	if (path.basename(dir) === 'node_modules') {
+		const names = installed(dir)
+		return names === null ? null : `packages:${names}`
+	}
 	try {
 		const manifest = JSON.parse(
 			readFileSync(path.join(dir, 'package.json'), 'utf8'),
 		) as { version?: unknown }
-		return `package:${String(manifest.version)}${storeEntry(dir)}`
+		const inside = installed(path.join(dir, 'node_modules'))
+		return `package:${String(manifest.version)}${storeEntry(dir)}${inside === null ? '' : `+${inside}`}`
 	} catch {
 		return null
 	}

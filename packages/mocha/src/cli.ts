@@ -322,12 +322,14 @@ async function affected(
 	if (records?.version !== RECORDS_VERSION || !anchor?.tree) {
 		selection = everything('no record')
 	} else {
+		const recorded = recordedPaths(records)
 		changed = diffTrees(
 			anchor.tree,
 			await currentTree(
 				ctx,
-				Object.keys(anchor.tree),
-				recordedPaths(records),
+				// A node_modules directory with nothing installed in it has no entry until something is.
+				[...Object.keys(anchor.tree), ...[...recorded].filter(isPackagePath)],
+				recorded,
 			),
 		)
 		const always = new Set(alwaysPaths(ctx))

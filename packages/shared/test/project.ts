@@ -205,19 +205,19 @@ export class Project {
 		writeFileSync(path.join(this.cwd, file), content)
 	}
 
-	/** Installs `name` at `version`: a CommonJS package whose export returns its name. Not in git, as node_modules is not. */
-	install(name: string, version: string): void {
-		const dir = `node_modules/${name}`
+	/** Installs `name` at `version`, in the node_modules of the directory `under`: a CommonJS package whose export returns its name. Not in git, as node_modules is not. */
+	install(name: string, version: string, under = ''): void {
+		const dir = path.posix.join(under, 'node_modules', name)
 		this.write(`${dir}/package.json`, `${JSON.stringify({ name, version, main: 'index.js' })}\n`)
 		this.write(`${dir}/index.js`, `module.exports = () => ${JSON.stringify(name)}\n`)
 	}
 
-	/** A test file named `name` that loads the package `name`. */
-	packageTest(name: string): string {
+	/** A test file that loads the package `name`, by its name or through the module `from`. */
+	packageTest(from: string, name = from): string {
 		const lines =
 			this.driver.style === 'esm'
-				? ["import assert from 'node:assert'", `import loaded from '${name}'`]
-				: ["const assert = require('node:assert')", `const loaded = require('${name}')`]
+				? ["import assert from 'node:assert'", `import loaded from '${from}'`]
+				: ["const assert = require('node:assert')", `const loaded = require('${from}')`]
 		return [
 			...(this.driver.prelude === '' ? [] : [this.driver.prelude]),
 			...lines,
@@ -276,6 +276,10 @@ export class Project {
 			['child_process'],
 			`assert.equal(child_process.execFileSync(process.execPath, ['-e', "console.log(require('${pkg}')())"]).toString().trim(), '${pkg}')`,
 		)
+	}
+
+	remove(file: string): void {
+		rmSync(path.join(this.cwd, file), { recursive: true, force: true })
 	}
 
 	read(file: string): string {

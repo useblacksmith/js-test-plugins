@@ -3,7 +3,7 @@ import path from 'node:path'
 import { test } from 'vitest'
 
 import type { Driver } from '../../shared/test/project.ts'
-import { pnpmCases } from '../../shared/test/pnpm.ts'
+import { installCases } from '../../shared/test/install.ts'
 import { cases } from '../../shared/test/scenarios.ts'
 import { packageRoot } from './harness.ts'
 
@@ -35,6 +35,6 @@ const driver: Driver = {
 }
 
 for (const { name, run } of cases(driver)) test(name, run)
-for (const { name, run } of pnpmCases(driver)) {
+for (const { name, run } of installCases(driver)) {
 	test(name, { timeout: 300_000 }, run)
 }
