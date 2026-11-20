@@ -108,9 +108,9 @@ function importedPackages(
 		const specifier = written && aliased(written, aliases)
 		if (specifier?.startsWith('.') || (specifier && path.isAbsolute(specifier))) {
 			const local = localFile(file, specifier)
-			if (local && packageDir(local) === null) {
-				found.push(...importedPackages(local, aliases, seen))
-			}
+			const installed = local && packageDir(local)
+			if (installed) found.push(installed)
+			else if (local) found.push(...importedPackages(local, aliases, seen))
 			continue
 		}
 		if (!specifier || /^[./]|^[a-z]+:/i.test(specifier)) continue
