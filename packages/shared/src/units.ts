@@ -469,7 +469,7 @@ export function analyze(code: string, file: string): Analysis | null {
 			continue
 		}
 		const tail = `\n${resolved(refs)}`
-		const previous = units[draft.name]
+		const previous = Object.hasOwn(units, draft.name) ? units[draft.name] : undefined
 		const next: Unit = {
 			kind: draft.kind,
 			sig: hash(draft.prefix + text(draft.start, draft.split)),
