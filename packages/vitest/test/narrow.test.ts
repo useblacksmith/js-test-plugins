@@ -265,6 +265,13 @@ describe('narrow: module digests', () => {
 		expect(difference(before, after)).toMatchObject({ functions: new Set(['f']) })
 	})
 
+	test('a lazily loaded module the file starts loading itself reruns everything', () => {
+		const lazy = "export async function f() {\n\tawait import('./a.js')\n\tawait import('./b.js')\n}"
+		const before = digest(`import './a.js'\n${lazy}`, 'm.js')
+		const after = digest(`import './b.js'\n${lazy}`, 'm.js')
+		expect(difference(before, after)).toBe('all')
+	})
+
 	test('a function held in a const that changes places reruns everything', () => {
 		const before = digest('export const f = () => 1\nexport const a = f()')
 		const after = digest('export const a = f()\nexport const f = () => 1')

@@ -64,6 +64,16 @@ export function difference(before: ResolvedDigest, after: ResolvedDigest): Chang
 			.slice(0, digest.linked)
 			.filter((source) => other.sources.slice(0, other.linked).includes(source))
 	if (!same(linked(before, after), linked(after, before))) return 'all'
+	// A module a function used to load lazily and the file now loads itself,
+	// or the reverse, loads at another time for every test.
+	const lazy = (digest: Digest) => new Set(digest.sources.slice(digest.linked))
+	for (const [digest, other] of [
+		[before, after],
+		[after, before],
+	] as const) {
+		const late = lazy(other)
+		if (digest.sources.slice(0, digest.linked).some((source) => late.has(source))) return 'all'
+	}
 
 	const functions = new Set<string>()
 	const locals = new Set<string>()
