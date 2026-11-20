@@ -98,7 +98,7 @@ node -e '
 	const fs = require("node:fs")
 	const [file, version] = process.argv.slice(1)
 	const text = fs.readFileSync(file, "utf8")
-	const next = text.replace(/^(\s*"version":\s*")[^"]*"/m, `$1${version}"`)
+	const next = text.replace(/("version":\s*")[^"]*"/, `$1${version}"`)
 	if (next === text) throw new Error(`no version field to set in ${file}`)
 	fs.writeFileSync(file, next)
 ' "$manifest" "$next"
