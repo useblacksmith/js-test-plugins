@@ -91,7 +91,8 @@ export default class BlacksmithReporter {
 		const links = new PackageLinks(ctx.repo)
 		const run: RunRecord = {
 			at: Date.now(),
-			global: links.expand(global),
+			// Run from a workspace, the runner and transformers are linked there.
+			global: links.expand(global, [`${toRelative(ctx.repo, ctx.cwd) || '.'}/.`]),
 			files: {},
 			partial: this.partial,
 		}

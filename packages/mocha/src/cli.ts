@@ -351,7 +351,9 @@ async function commit(ctx: Context, runFiles: string[]): Promise<void> {
 	// pnpm: a test also depends on the links that led to its packages.
 	const links = new PackageLinks(ctx.repo)
 	for (const run of runs) {
-		run.global = links.expand(run.global)
+		// Run from a workspace, Mocha and what it requires are linked there.
+		const cwd = path.relative(ctx.repo, ctx.cwd).split(path.sep).join('/')
+		run.global = links.expand(run.global, [`${cwd || '.'}/.`])
 		for (const [from, to] of Object.entries(run.graph)) {
 			run.graph[from] = links.expand(to, [from])
 		}
