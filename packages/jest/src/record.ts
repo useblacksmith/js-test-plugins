@@ -186,6 +186,8 @@ function childEnvironment(env: NodeJS.ProcessEnv, dir: string): void {
 	env[CHILD_RECORD_ENV] = dir
 }
 
+let begun = 0
+
 /**
  * Starts the record of the test file `test`. `sandboxEnv` is the copy of the
  * environment Jest gave the test, which a test passing `env` to a child reads.
@@ -201,7 +203,8 @@ export function begin(
 	const childDir = path.join(
 		dir,
 		'children',
-		`${name}-${process.pid}-${threadId}`,
+		// Several projects may run one test file in the same process.
+		`${name}-${process.pid}-${threadId}-${begun++}`,
 	)
 	try {
 		raw.mkdirSync(childDir, { recursive: true })

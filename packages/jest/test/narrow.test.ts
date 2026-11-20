@@ -89,3 +89,42 @@ for (const [mode, args] of [
 		})
 	})
 }
+
+describe('a test file two projects run', () => {
+	let repo: Repo
+	before(() => {
+		repo = new Repo('narrow')
+		const project = (name: string): string =>
+			`{ displayName: '${name}', rootDir: __dirname, testMatch: ['**/test/which.test.js'], transform: { '\\\\.js$': '<rootDir>/esm-transformer.js' }, moduleNameMapper: { '^lib$': '<rootDir>/src/lib-${name}.js' } }`
+		repo.write(
+			'jest.config.js',
+			`const { withBlacksmith } = require(process.env.BLACKSMITH_JEST_ENTRY)\nmodule.exports = withBlacksmith({ projects: [${project('a')}, ${project('b')}] }, { narrow: true })\n`,
+		)
+		repo.write('src/lib-a.js', 'export const which = () => 1\n')
+		repo.write('src/lib-b.js', 'export const which = () => 1\n')
+		repo.write(
+			'test/which.test.js',
+			"import { which } from 'lib'\ntest('which', () => expect(which()).toBe(1))\n",
+		)
+		repo.git('add', '-A')
+		repo.git('commit', '-q', '-m', 'projects')
+	})
+	after(() => repo.cleanup())
+
+	test('records what it loaded in each project', () => {
+		const result = repo.jest('--runInBand')
+		assert.equal(result.status, 0, result.output)
+		const deps = repo.records().files['test/which.test.js']?.deps ?? []
+		assert.ok(deps.includes('src/lib-a.js'), deps.join())
+		assert.ok(deps.includes('src/lib-b.js'), deps.join())
+	})
+
+	for (const name of ['a', 'b']) {
+		test(`reruns for a change only project ${name} resolves`, () => {
+			repo.write(`src/lib-${name}.js`, 'export const which = () => 2 - 1\n')
+			const result = repo.jest('--runInBand')
+			assert.equal(result.status, 0, result.output)
+			assert.deepEqual(Repo.ran(result), ['which'])
+		})
+	}
+})
