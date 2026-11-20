@@ -115,3 +115,23 @@ export function packageOf(
 		? repositoryPackage(repo, absolute)
 		: null
 }
+
+/**
+ * Whether the file read under way was made while a module loads, by the
+ * runner's resolver or a transformer, and not by code a test called: walking
+ * up from the call, a frame `loader` accepts comes before any frame of the
+ * repository. A read with no caller left on the stack (made from a callback
+ * or a promise) counts as the test's, which only reruns more.
+ */
+export function readDuringLoad(
+	own: (line: string) => boolean,
+	loader: (line: string) => boolean,
+): boolean {
+	for (const line of (new Error().stack ?? '').split('\n').slice(1)) {
+		if (own(line)) continue
+		if (loader(line)) return true
+		if (line.includes('node:') || !/[\\/]/.test(line)) continue
+		if (!isPackagePath(line)) return false
+	}
+	return false
+}

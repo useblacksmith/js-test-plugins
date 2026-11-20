@@ -146,6 +146,25 @@ function packageScenarios(): Scenario[] {
 			},
 		},
 		{
+			name: 'a package.json change to its dependency fields reruns a test that read the file through a helper package',
+			packages: true,
+			async run(project) {
+				project.change(
+					'test/helped.test.js',
+					project.helperReadingTest('helped', 'read-helper', 'package.json'),
+				)
+				const run = await project.run()
+				assert.deepEqual(run.ran, [...ALL, 'helped'].sort(), run.output)
+				const manifest = JSON.parse(project.read('package.json')) as object
+				project.change(
+					'package.json',
+					`${JSON.stringify({ ...manifest, dependencies: { some: '^1.0.0' } }, null, 2)}\n`,
+				)
+				const next = await project.run()
+				assert.ok(next.ran.includes('helped'), next.output)
+			},
+		},
+		{
 			name: 'a new version of a package a test reads a file of, or loads in a child process, reruns that test file',
 			packages: true,
 			async run(project) {

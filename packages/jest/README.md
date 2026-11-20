@@ -80,6 +80,8 @@ The second argument of `withBlacksmith`:
   installed copy that shadows the one a test loaded before.
   In a pnpm store a copy counts as changed when another copy of the same
   package is added or removed, because `pnpm add` leaves the old one in place.
+- A test that reads `package.json` through a helper package reruns on any
+  change to it, unless the helper reads it while being imported.
 - What a test reaches over the network (a database, a mock server) is not
   recorded; map it with `dependencies`.
 - A file that a module of Jest's own process (a custom transformer, a custom

@@ -3,6 +3,7 @@ import {
 	isPackagePath,
 	packageDir,
 	packageOf,
+	readDuringLoad,
 	repositoryPackage,
 } from '../../shared/src/packages.ts'
 import Module, { createRequire, syncBuiltinESMExports } from 'node:module'
@@ -278,20 +279,15 @@ function install(): void {
 		path.join(process.cwd(), 'package.json'),
 	])
 
-	/** Whether the read under way was made by an installed package: the frame nearest to the call decides. */
+	/** Whether the read under way was made while a module loads (a loader such as ts-node or Babel), not by code a spec called. */
 	function readByPackage(): boolean {
-		const frame = (new Error().stack ?? '')
-			.split('\n')
-			.slice(1)
-			.find(
-				(line) =>
-					!line.includes('node:') &&
-					!line.includes(
-						`${path.sep}shared${path.sep}src${path.sep}fs-recorder.`,
-					) &&
-					!line.includes(here),
-			)
-		return frame !== undefined && isPackagePath(frame)
+		return readDuringLoad(
+			(line) =>
+				line.includes(`${path.sep}shared${path.sep}src${path.sep}fs-recorder.`) ||
+				line.includes(`${path.sep}shared${path.sep}src${path.sep}packages.`) ||
+				line.includes(here),
+			(line) => line.includes('node:internal/modules'),
+		)
 	}
 
 	function read(file: string, content: boolean): void {
