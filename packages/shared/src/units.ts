@@ -375,7 +375,11 @@ export function analyze(code: string, file: string): Analysis | null {
 					declaration(node.declaration, true)
 					break
 				}
-				if (node.source && node.exportKind !== 'type') linked.push(node.source.value)
+				// TypeScript drops a re-export that names only types.
+				const kept =
+					node.specifiers.length === 0 ||
+					(node.specifiers as Node[]).some((specifier) => specifier.exportKind !== 'type')
+				if (node.source && node.exportKind !== 'type' && kept) linked.push(node.source.value)
 				for (const specifier of node.specifiers as Node[]) {
 					if (specifier.exportKind === 'type') continue
 					const local: string = specifier.local.name ?? specifier.local.value

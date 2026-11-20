@@ -272,6 +272,13 @@ describe('narrow: module digests', () => {
 		expect(difference(before, after)).toBe('all')
 	})
 
+	test('a re-export TypeScript drops is not a module the file loads', () => {
+		const before = digest("export { type T } from './types.ts'\nexport const a = 1")
+		expect(before.sources).toEqual([])
+		const after = digest("export { type T } from './types.ts'\nimport './types.ts'\nexport const a = 1")
+		expect(difference(before, after)).toMatchObject({ added: ['?./types.ts'] })
+	})
+
 	test('a function held in a const that changes places reruns everything', () => {
 		const before = digest('export const f = () => 1\nexport const a = f()')
 		const after = digest('export const a = f()\nexport const f = () => 1')
