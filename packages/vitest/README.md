@@ -75,7 +75,7 @@ By default a change to a file reruns every test file that loaded it. With `narro
 | A new import | Those that had not loaded the imported module |
 | Any other top-level statement, an `export *`, or declarations that changed places | All that loaded the file, as without the option |
 
-A value built from a changed one counts as changed, and a function that mentions a changed value reruns the test files that called it. Files the plugin cannot take apart (CommonJS, files using `eval`, anything that is not JavaScript or TypeScript) and test files run in browser mode keep the default behaviour.
+A value built from a changed one counts as changed, and a function that mentions a changed value reruns the test files that called it. Files the plugin cannot take apart (CommonJS, files using `eval`, anything that is not JavaScript or TypeScript) and test files run in browser mode keep the default behaviour, as does a run with `sequence.hooks` set to anything but `'stack'`.
 
 To record function entries the plugin adds one call at the start of each top-level function while Vite transforms the module; source maps account for it. The record is kept beside the dependency record and travels with it.
 

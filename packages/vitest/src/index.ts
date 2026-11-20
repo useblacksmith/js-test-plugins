@@ -104,6 +104,8 @@ export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 	let changedApplied = false
 	let restored: Promise<void> | undefined
 	let shadow: ShadowAnalysis | undefined
+	let unstacked = false
+	let warnedUnstacked = false
 	const plugin: Plugin = {
 		name: 'blacksmith',
 		config(userConfig) {
@@ -168,7 +170,16 @@ export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 				vitest.config.root,
 			)
 			active.dependencies = provider.dependencies
-			active.narrow = options.narrow === true && !options.shadow
+			// The record of what a test file entered is written in an
+			// `afterAll`; only stacked hooks run it after the file's own.
+			if (project.config.sequence.hooks !== 'stack') unstacked = true
+			if (options.narrow && unstacked && !warnedUnstacked) {
+				warnedUnstacked = true
+				vitest.logger.warn(
+					"[blacksmith] narrow needs sequence.hooks: 'stack', every test file that loaded a changed file runs",
+				)
+			}
+			active.narrow = options.narrow === true && !options.shadow && !unstacked
 			// Workers drop what they read outside the repository: the anchor
 			// cannot cover it, and vitest's record would otherwise keep every
 			// temp file a run touched.
