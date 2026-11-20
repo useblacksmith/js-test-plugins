@@ -115,6 +115,40 @@ function resolveRelative(repo: string, importer: string, specifier: string): str
 	return null
 }
 
+/**
+ * Vite does not transform a module it holds a cached result for, so a file
+ * put back to an earlier content keeps the digest of the content between.
+ * Brings every digest this run did not produce in line with the file: its
+ * old specifiers still hold when it imports the same modules, and without
+ * that the module is forgotten, so its changes rerun every test that loaded it.
+ */
+async function refreshDigests(repo: string, records: UnitRecords): Promise<void> {
+	await Promise.all(
+		Object.entries(records.modules).map(async ([module, stored]) => {
+			if (digests.has(module)) return
+			let code: string
+			try {
+				code = await readFile(path.join(repo, module), 'utf8')
+			} catch {
+				return
+			}
+			const analysis = analyze(code, path.join(repo, module))
+			if (!analysis) {
+				delete records.modules[module]
+				return
+			}
+			const current = resolveDigest(analysis.digest, stored.specifiers)
+			if (JSON.stringify(current) === JSON.stringify({ ...current, ...stored })) return
+			const known = analysis.digest.sources.every(
+				(source) =>
+					Object.hasOwn(stored.specifiers, source) || stored.sources.includes(`?${source}`),
+			)
+			if (known) records.modules[module] = current
+			else delete records.modules[module]
+		}),
+	)
+}
+
 async function readUnits(dir: string): Promise<UnitRecords | null> {
 	try {
 		const records = JSON.parse(
@@ -189,6 +223,7 @@ export async function updateUnits(
 	// to compare what the tests left out last ran against.
 	if (!narrowed && !partial) {
 		for (const [module, digest] of digests) records.modules[module] = digest
+		await refreshDigests(repo, records)
 	}
 	for (const test of Object.keys(records.tests)) {
 		if (!existsSync(path.join(repo, test))) delete records.tests[test]

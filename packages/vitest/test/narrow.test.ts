@@ -139,6 +139,18 @@ describe('narrow: which test files a change inside a file reruns', () => {
 		expect(await repo.run()).toEqual(ALL.filter((name) => name !== 'dynamic'))
 	})
 
+	test('a change made, undone and made again reruns each time', async () => {
+		const repo = await recorded('again')
+		for (const [from, to] of [
+			['helper(n) + 1', 'helper(n) + 1 + 0'],
+			['helper(n) + 1 + 0', 'helper(n) + 1'],
+			['helper(n) + 1', 'helper(n) + 1 + 0'],
+		] as const) {
+			repo.edit('src/lib.ts', from, to)
+			expect(await repo.run()).toEqual(['called'])
+		}
+	})
+
 	test('a parameter list counts as a value: it runs even when the body is never entered', async () => {
 		const repo = await recorded('signature')
 		repo.edit('src/helper.ts', 'spare()', 'spare(n = 1)')
@@ -169,6 +181,10 @@ describe('narrow: which test files a change inside a file reruns', () => {
 		expect(await repo.run('-t', 'nothing')).toEqual([])
 		repo.edit('src/lib.ts', 'helper(n) + 1', 'helper(n) + 1 + 0')
 		expect(await repo.run()).toEqual(['called'])
+		// A filtered run after an edit does not stand in for the tests it left out.
+		repo.edit('src/lib.ts', 'n * 2', 'n * 2 + 0')
+		await repo.run('-t', 'nothing')
+		expect(await repo.run()).toEqual(['arrow'])
 	})
 })
 
@@ -202,7 +218,7 @@ describe('narrow: module digests', () => {
 			out = out.slice(0, at) + text + out.slice(at)
 		}
 		out += footer('a.js')
-		expect(out.startsWith("'use client'\nexport function strict(a) { \"use strict\";__")).toBe(true)
+		expect(out.startsWith("'use client'\nexport function strict(a) { \"use strict\";;__")).toBe(true)
 		const module = (await import(
 			`data:text/javascript,${encodeURIComponent(out)}`
 		)) as Record<string, (a: number) => unknown>
@@ -228,6 +244,25 @@ describe('narrow: module digests', () => {
 		expect(digest("import { T } from './types.js'\nexport const a = 1", 'a.js').sources).toEqual([
 			'?./types.js',
 		])
+	})
+
+	test('a function held in a const that changes places reruns everything', () => {
+		const before = digest('export const f = () => 1\nexport const a = f()')
+		const after = digest('export const a = f()\nexport const f = () => 1')
+		expect(difference(before, after)).toBe('all')
+	})
+
+	test('a directive without a semicolon stays apart from the inserted call', () => {
+		const code = "export function f() {\n\t'use strict'\n\treturn 1\n}"
+		const analysis = analyze(code, 'a.js')
+		expect(analysis?.marks.map(([, text]) => text[0])).toEqual([';'])
+	})
+
+	test('a declaration named like an inherited property', () => {
+		const names = Object.keys(
+			digest('export const toString = 1\nexport function constructor() {}').units,
+		)
+		expect(names.sort()).toEqual(['constructor', 'toString'])
 	})
 
 	test('values that change places rerun everything', () => {
