@@ -224,3 +224,30 @@ describe('shards', () => {
 		}
 	})
 })
+
+describe('a test that starts a Jest of its own', () => {
+	let repo: Repo
+	before(() => {
+		repo = new Repo('nested')
+	})
+	after(() => repo.cleanup())
+
+	test('the inner run leaves the record of the outer one alone', () => {
+		const first = repo.jest('--runInBand')
+		assert.equal(first.status, 0, first.output)
+		assert.match(first.lines.join('\n'), /record: 2 of 2 test file\(s\) vouched for/)
+		assert.deepEqual(Object.keys(repo.records().files).sort(), [
+			'test/first.test.js',
+			'test/nested.test.js',
+		])
+		assert.deepEqual(Repo.ran(repo.jest('--runInBand')), [])
+	})
+
+	test('a test file of the inner run is a dependency of the test file that started it', () => {
+		repo.write('inner/inner.fixture.js', "test('inner', () => {\n\texpect(1).toBe(1)\n})\n")
+		const changed = repo.jest('--runInBand')
+		assert.equal(changed.status, 0, changed.output)
+		assert.deepEqual(Repo.ran(changed), ['nested'])
+		assert.deepEqual(Repo.ran(repo.jest('--runInBand')), [])
+	})
+})

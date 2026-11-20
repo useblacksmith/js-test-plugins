@@ -8,6 +8,8 @@ import type { Affects, Decision, Options } from './core.ts'
 export const ENV_DIR = 'BLACKSMITH_JEST_DIR'
 /** The directory the processes running tests write what each test file loaded to; made by the config helper. */
 export const ENV_RECORD = 'BLACKSMITH_JEST_RECORD'
+/** The process that made the directory of `ENV_RECORD`, which a Jest that a test starts inherits and must leave alone. */
+export const ENV_RECORD_OWNER = 'BLACKSMITH_JEST_RECORD_OWNER'
 /** The `jest-runtime` the project's Jest runs tests with, which the recording runtime extends. */
 export const ENV_RUNTIME = 'BLACKSMITH_JEST_RUNTIME'
 
