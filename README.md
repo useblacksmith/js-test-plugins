@@ -13,9 +13,27 @@ Actions cache between jobs.
 
 ## Development
 
-A pnpm workspace. `packages/shared` holds the code the plugins share (file-read
-recording, the git anchor, the cache client); it is not published, each
-plugin compiles it into its own `dist/`.
+A pnpm workspace. `packages/core` is the test selection itself, written
+without a test runner in mind; it is not published, each plugin compiles it
+into its own `dist/`. It owns:
+
+| Module | What it decides |
+| --- | --- |
+| `record.ts` | The record of a run: per test file, and per test where the runner can tell, what was loaded, what passed, and how it is stored |
+| `select.ts` | Which test files and tests a set of changed files reaches, and how a run's record merges into the stored one |
+| `anchor.ts` | Which files are compared between runs (recorded files, manifests, lockfiles, the workflow file, `dependencies` globs) and what changed |
+| `store.ts` | The record on disk, its cache key, and restoring and saving it through the Actions cache, one entry per shard |
+| `engine.ts` | `Session.plan(testFiles)` and `Session.commit(runRecords)`, the two calls a plugin makes |
+| `unitstore.ts`, `narrow.ts`, `units.ts` | Narrowing a changed file to the tests that entered the functions that changed |
+| `fs-recorder.ts`, `git.ts`, `packages.ts`, `actions-cache.ts`, `shard.ts` | File-read recording, git trees, installed packages, the cache client, shard assignment |
+
+A plugin is the adapter between its runner and those two calls: it lists the
+runner's test files, turns what the runner loaded into a run record, and
+applies the decision the way the runner allows (Jest's sequencer, Mocha's
+`--ignore` list, Vitest's changed-files provider). Vitest 5.1 keeps the
+dependency record itself and Vitest 4.x leaves it to the plugin; both become
+the same run record. A selection rule, a record field or a cache behaviour
+belongs in `packages/core`, so that every plugin gets it.
 
 ```sh
 corepack enable
@@ -27,7 +45,7 @@ pnpm test
 
 ### End-to-end scenarios
 
-`packages/shared/test/scenarios.ts` lists the cases every plugin must pass: a
+`packages/core/test/scenarios.ts` lists the cases every plugin must pass: a
 small sample project, a real run of the test runner, a change (a source file,
 `package.json`, a new version of an installed package, the workflow file, a new
 or failing test), and

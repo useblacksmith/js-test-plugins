@@ -2,8 +2,7 @@ import { mkdirSync, mkdtempSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { ENV_REPO } from '../../shared/src/fs-recorder.ts'
-import type { Options } from './core.ts'
+import { ENV_REPO } from '../../core/src/fs-recorder.ts'
 import {
 	ENV_NARROW,
 	ENV_RECORD,
@@ -13,9 +12,10 @@ import {
 	log,
 	resolveFromJest,
 	state,
+	type Options,
 } from './state.ts'
 
-export type { Options } from './core.ts'
+export type { Options } from './state.ts'
 
 type JestConfig = Record<string, unknown> & {
 	projects?: unknown[]

@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import { FINAL_SUFFIX, workerRecordPath } from '../../shared/src/fs-recorder.js'
+import { FINAL_SUFFIX, workerRecordPath } from '../../core/src/fs-recorder.js'
 
 import type { TestModule, TestProject, Vitest } from 'vitest/node'
 
@@ -12,7 +12,7 @@ import type { TestModule, TestProject, Vitest } from 'vitest/node'
  * the same shape but a file of its own, and the rest of the plugin
  * (anchor, cache bundle, selection) reads one format on every version.
  */
-export const RECORDS_VERSION = 2
+export const DEPENDENCIES_VERSION = 2
 
 /** Vitest 5.1.0 is the first to record dependencies and hand them to a VCS provider. */
 export function recordsNatively(version: string): boolean {
@@ -201,9 +201,9 @@ export class DependencyStore {
 			const records = JSON.parse(
 				await readFile(this.file, 'utf8'),
 			) as DependencyRecords
-			if (records.version === RECORDS_VERSION && records.projects) return records
+			if (records.version === DEPENDENCIES_VERSION && records.projects) return records
 		} catch {}
-		return { version: RECORDS_VERSION, projects: {} }
+		return { version: DEPENDENCIES_VERSION, projects: {} }
 	}
 
 	/**
@@ -296,3 +296,97 @@ export function dependencyStore(vitest: Vitest): DependencyStore | null {
 	if (!store) stores.set(vitest, (store = new DependencyStore(vitest)))
 	return store
 }
+
+/** The dependency record in `dir` (Vitest's, or the plugin's own on a Vitest that keeps none), or `null` before the first recorded run. */
+export async function readRecords(
+	vitest: Vitest,
+	dir: string,
+): Promise<DependencyRecords | null> {
+	try {
+		const records = JSON.parse(
+			await readFile(recordsPath(vitest, dir), 'utf8'),
+		) as DependencyRecords
+		return records.version === DEPENDENCIES_VERSION && records.projects ? records : null
+	} catch {
+		return null
+	}
+}
+
+export async function writeRecords(
+	vitest: Vitest,
+	dir: string,
+	records: DependencyRecords,
+): Promise<void> {
+	const file = recordsPath(vitest, dir)
+	await mkdir(path.dirname(file), { recursive: true })
+	const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+	await writeFile(tmp, JSON.stringify(records))
+	await rename(tmp, file)
+}
+
+/** The files a record names, absolute. Vitest records every project's paths relative to the root config's root. */
+export function recordedFiles(
+	vitest: Vitest,
+	project: ProjectRecords,
+	record: DependencyRecord | undefined,
+): string[] {
+	return (record?.deps ?? []).flatMap((index) => {
+		const module = project.modules[index]
+		return module === undefined ? [] : [path.resolve(vitest.config.root, module)]
+	})
+}
+
+/**
+ * Rewrites the dependency record without the modules outside the
+ * repository (the anchor cannot cover them) and without tests that no longer
+ * exist, renumbering what the remaining records point to. Vitest only ever
+ * appends, so a record otherwise grows by every temp file a run touched.
+ */
+export async function pruneRecords(
+	vitest: Vitest,
+	repo: string,
+	dir: string,
+): Promise<void> {
+	const records = await readRecords(vitest, dir)
+	if (!records) return
+	const root = vitest.config.root
+	for (const project of Object.values(records.projects ?? {})) {
+		const keep = new Map<number, number>()
+		const modules: string[] = []
+		const renumber = (record: DependencyRecord): void => {
+			record.deps = [
+				...new Set(
+					record.deps.flatMap((index) => {
+						const module = project.modules[index]
+						if (module === undefined) return []
+						const absolute = path.resolve(root, module)
+						if (
+							path.relative(repo, absolute).startsWith('..') ||
+							path.isAbsolute(path.relative(repo, absolute))
+						) {
+							return []
+						}
+						let next = keep.get(index)
+						if (next === undefined) {
+							next = modules.push(module) - 1
+							keep.set(index, next)
+						}
+						return [next]
+					}),
+				),
+			]
+		}
+		for (const [test, record] of Object.entries(project.files)) {
+			if (!existsSync(path.resolve(root, test))) {
+				delete project.files[test]
+				continue
+			}
+			renumber(record)
+		}
+		if (project.config) renumber(project.config)
+		if (project.globalSetup) renumber(project.globalSetup)
+		project.modules = modules
+	}
+	await writeRecords(vitest, dir, records)
+}
+

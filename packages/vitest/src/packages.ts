@@ -4,100 +4,20 @@ import path from 'node:path'
 
 import type { Vitest } from 'vitest/node'
 
-import { PACKAGES_SUFFIX } from '../../shared/src/fs-recorder.ts'
-import { PackageLinks, packageDir } from '../../shared/src/packages.ts'
+import { PACKAGES_SUFFIX } from '../../core/src/fs-recorder.ts'
+import { PackageLinks, packageDir } from '../../core/src/packages.ts'
 
 /**
  * The installed packages each test file loaded. Vitest's own record ends at
  * `node_modules`, so this one is kept beside it: an install then reruns the
  * test files that loaded a package whose version changed, not every one.
  */
-export const PACKAGES_FILE = 'blacksmith-packages.json'
-const PACKAGES_VERSION = 2
-
-export interface PackageRecords {
-	version: number
-	/** Repository-relative test file → the package directories it loaded, repository-relative. */
-	files: Record<string, string[]>
-	/** Packages the run itself loads (Vitest, Vite, what the config files import, and what those depend on): a change reruns everything. */
-	global: string[]
-	/** Test files whose list misses packages (a browser project ran them, or the Node could not see ES module loads): they rerun with the lockfile too. */
-	incomplete?: string[]
-}
-
 function relative(repo: string, file: string): string | null {
 	const result = path.relative(repo, file)
 	if (result === '' || result.startsWith('..') || path.isAbsolute(result)) {
 		return null
 	}
 	return result.split(path.sep).join('/')
-}
-
-/**
- * The record as the file holds it: each directory once, and a test file's
- * list as positions in `packages`. Most test files load the same few hundred
- * packages, so naming them under each made the file many times larger.
- */
-interface StoredPackages {
-	version: number
-	packages: string[]
-	files: Record<string, number[]>
-	global: number[]
-	incomplete?: string[]
-}
-
-function store(records: PackageRecords): StoredPackages {
-	const at = new Map<string, number>()
-	const packages: string[] = []
-	const position = (dir: string): number => {
-		let found = at.get(dir)
-		if (found === undefined) {
-			found = packages.length
-			at.set(dir, found)
-			packages.push(dir)
-		}
-		return found
-	}
-	const files: Record<string, number[]> = {}
-	for (const [file, dirs] of Object.entries(records.files)) files[file] = dirs.map(position)
-	const stored: StoredPackages = {
-		version: PACKAGES_VERSION,
-		packages,
-		files,
-		global: records.global.map(position),
-	}
-	if (records.incomplete) stored.incomplete = records.incomplete
-	return stored
-}
-
-export async function readPackages(dir: string): Promise<PackageRecords | null> {
-	try {
-		const stored = JSON.parse(
-			await readFile(path.join(dir, PACKAGES_FILE), 'utf8'),
-		) as StoredPackages | PackageRecords
-		// The layout before this one named the directories under each test file.
-		if (stored.version === 1 && !('packages' in stored)) {
-			return { ...stored, version: PACKAGES_VERSION }
-		}
-		if (stored.version !== PACKAGES_VERSION || !('packages' in stored)) return null
-		const named = (positions: number[]): string[] =>
-			positions.map((position) => {
-				const dir = stored.packages[position]
-				if (dir === undefined) throw new Error('not a package record')
-				return dir
-			})
-		const files: Record<string, string[]> = {}
-		for (const [file, positions] of Object.entries(stored.files)) files[file] = named(positions)
-		const records: PackageRecords = {
-			version: PACKAGES_VERSION,
-			files,
-			global: named(stored.global),
-		}
-		if (stored.incomplete) records.incomplete = stored.incomplete
-		return records
-	} catch {
-		return null
-	}
 }
 
 /** The directory of the package `name` as a module in `from` resolves it, without loading anything. */
@@ -245,34 +165,34 @@ export function globalPackages(vitest: Vitest, repo: string): string[] {
 	return [...found].sort()
 }
 
+/** The packages the test files of one run loaded, repository-relative. */
+export interface RunPackages {
+	/** Test file → the package directories it loaded, with the links that led to them. */
+	files: Map<string, string[]>
+	/** Test files whose list misses packages (a browser project ran them, or the Node could not see ES module loads): they rerun with the lockfile too. */
+	incomplete: Set<string>
+	/** Packages the run itself loads: a change reruns everything. */
+	global: string[]
+}
+
 /**
- * Merges what the workers left under `recordRoot` for the test files of this
- * run into the record in `dir`. A test file two projects ran keeps the
- * packages of both, and one run in part (`partial`) those it had; one that no longer exists is dropped.
- * `bundled` are the test files a browser project ran.
+ * What the workers left under `recordRoot` for the test files of this run.
+ * A test file two projects ran has the packages of both. `bundled` are the
+ * test files a browser project ran.
  */
-export async function updatePackages(
+export async function collectPackages(
 	vitest: Vitest,
 	repo: string,
-	dir: string,
 	recordRoot: string | undefined,
-	partial: boolean,
 	bundled: readonly string[],
-	/** Test files (repo-relative) the shard runs in some of their projects only. */
-	split: ReadonlySet<string> = new Set(),
-): Promise<void> {
-	const records = (await readPackages(dir)) ?? {
-		version: PACKAGES_VERSION,
-		files: {},
-		global: [],
-	}
+): Promise<RunPackages> {
 	const fresh = new Map<string, Set<string>>()
 	const importers = new Map<string, Set<string>>()
 	const links = new PackageLinks(repo)
-	const unseen = new Set<string>()
+	const incomplete = new Set<string>()
 	for (const file of bundled) {
 		const test = relative(repo, file)
-		if (test !== null) unseen.add(test)
+		if (test !== null) incomplete.add(test)
 	}
 	const pieces = recordRoot ? path.join(recordRoot, 'deps') : null
 	let names: string[] = []
@@ -291,7 +211,7 @@ export async function updatePackages(
 			}
 			const test = relative(repo, piece.test)
 			if (test !== null) {
-				if (piece.incomplete) unseen.add(test)
+				if (piece.incomplete) incomplete.add(test)
 				let dirs = fresh.get(test)
 				if (!dirs) fresh.set(test, (dirs = new Set()))
 				for (const loaded of piece.packages) {
@@ -308,51 +228,13 @@ export async function updatePackages(
 		} catch {}
 		await rm(file, { force: true })
 	}
-	// A run narrowed by `--project` saw a shared test file in some of its
-	// projects only, and a partial one (`-t`, `.only`, a line filter) ran
-	// some of a file's tests only, as did a shard that has a test file in
-	// some of its projects only: what the rest loaded stays.
-	const narrowed = vitest.config.project.length > 0
-	for (const [test, dirs] of fresh) {
-		if (narrowed || partial || split.has(test)) {
-			for (const dir of records.files[test] ?? []) dirs.add(dir)
-		}
-		// pnpm: a test also depends on the links that led to its packages.
-		records.files[test] = links.expand(dirs, importers.get(test))
-	}
-	for (const test of Object.keys(records.files)) {
-		if (!existsSync(path.join(repo, test))) delete records.files[test]
-	}
-	// A narrowed or partial run did not see what every project makes of a test file.
-	const incomplete = new Set(unseen)
-	for (const test of records.incomplete ?? []) {
-		if (
-			(narrowed || partial || split.has(test) || !fresh.has(test)) &&
-			existsSync(path.join(repo, test))
-		) {
-			incomplete.add(test)
-		}
-	}
-	records.incomplete = [...incomplete].sort()
-	// The other projects' config and globalSetup files were not loaded by a narrowed run.
-	const global = new Set(globalPackages(vitest, repo))
-	if (narrowed) {
-		for (const dir of records.global) {
-			if (existsSync(path.join(repo, dir))) global.add(dir)
-		}
-	}
+	const files = new Map<string, string[]>()
+	// pnpm: a test also depends on the links that led to its packages.
+	for (const [test, dirs] of fresh) files.set(test, links.expand(dirs, importers.get(test)))
 	const roots: string[] = []
 	for (const project of [vitest.getRootProject(), ...vitest.projects]) {
 		const root = relative(repo, project.config.root)
 		if (root !== null) roots.push(`${root}/.`)
 	}
-	records.global = links.expand(global, roots)
-	await mkdir(dir, { recursive: true })
-	await writePackages(path.join(dir, PACKAGES_FILE), records)
-}
-
-export async function writePackages(file: string, records: PackageRecords): Promise<void> {
-	const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-	await writeFile(tmp, JSON.stringify(store(records)))
-	await rename(tmp, file)
+	return { files, incomplete, global: links.expand(globalPackages(vitest, repo), roots) }
 }

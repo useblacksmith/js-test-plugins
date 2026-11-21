@@ -7,21 +7,18 @@ import type { Plugin } from 'vitest/config'
 import type { Vitest } from 'vitest/node'
 import { version as vitestVersion } from 'vitest/node'
 import { instrument } from './units.js'
-import { ENV_OWN_RECORDS, ENV_RECORD_ROOT, ENV_REPO } from '../../shared/src/fs-recorder.js'
+import { ENV_OWN_RECORDS, ENV_RECORD_ROOT, ENV_REPO } from '../../core/src/fs-recorder.js'
 import { dependencyStore, recordsNatively, recordsOwn } from './records.js'
-import { repoRoot } from '../../shared/src/git.js'
+import { repoRoot } from '../../core/src/git.js'
 
+import { DEFAULT_MAX_SHARDS } from '../../core/src/store.js'
 import {
-	compileDependencies,
 	configuredProvider,
 	isTreeSnapshotProvider,
 	isSnapshotRecorder,
-	DEFAULT_MAX_SHARDS,
-	restoreDependencyCache,
-	ShadowAnalysis,
 	SnapshotRecorder,
 	TreeSnapshotProvider,
-} from './affected.js'
+} from './provider.js'
 import {
 	isStable,
 	stableShards,
@@ -100,8 +97,6 @@ const PACKAGE = '@useblacksmith/vitest'
 export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 	const provider = new TreeSnapshotProvider()
 	let changedApplied = false
-	let restored: Promise<void> | undefined
-	let shadow: ShadowAnalysis | undefined
 	let unstacked = false
 	let warnedUnstacked = false
 	const plugin: Plugin = {
@@ -156,11 +151,11 @@ export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 			// second plugin instance; configure the provider vitest actually uses.
 			const active = configuredProvider(vitest) ?? provider
 			active.vitest = vitest
-			provider.dependencies = compileDependencies(
-				options.dependencies,
-				vitest.config.root,
-			)
-			active.dependencies = provider.dependencies
+			provider.options = {
+				...(options.dependencies ? { dependencies: options.dependencies } : {}),
+				...(options.maxShards === undefined ? {} : { maxShards: options.maxShards }),
+			}
+			active.options = provider.options
 			// The record of what a test file entered is written in an
 			// `afterAll`; only stacked hooks run it after the file's own.
 			if (project.config.sequence.hooks !== 'stack') unstacked = true
@@ -208,10 +203,6 @@ export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 					)
 					vitest.config.changed = false
 				}
-				shadow ??= new ShadowAnalysis(vitest, active.dependencies)
-			} else {
-				restored ??= restoreDependencyCache(vitest, maxShards)
-				await restored
 			}
 			// With `--changed`, vitest measures coverage for the changed files
 			// alone, so thresholds would pass on a run that covers nothing.
@@ -285,7 +276,7 @@ export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 				supportsVersion(vitest.version) &&
 				!reporters.some(isSnapshotRecorder)
 			) {
-				reporters.push(new SnapshotRecorder(active, { shadow }))
+				reporters.push(new SnapshotRecorder(active, { shadow: options.shadow === true }))
 			}
 		},
 	}

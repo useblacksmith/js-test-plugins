@@ -14,7 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { loadRecords, type Records, type StoredRecords } from '../src/core.ts'
+import { loadRecords, type Records, type StoredRecords } from '../../core/src/record.ts'
 
 export const packageRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),

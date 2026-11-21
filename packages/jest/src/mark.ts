@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 
-import { analyze, footer } from '../../shared/src/units.ts'
+import { analyze, footer } from '../../core/src/units.ts'
 
 /**
  * Runs in every process that runs test files. Wraps the project's

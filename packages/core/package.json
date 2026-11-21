@@ -1,0 +1,19 @@
+{
+	"name": "@useblacksmith/test-plugins-core",
+	"private": true,
+	"description": "The framework-agnostic test selection the plugins compile into their own dist/; never published",
+	"type": "module",
+	"license": "MIT",
+	"scripts": {
+		"check:types": "tsc --noEmit",
+		"test": "node --test test/*.test.ts"
+	},
+	"devDependencies": {
+		"@types/node": "^26.6.6",
+		"@types/picomatch": "^4.0.3",
+		"magic-string": "1.4.5",
+		"oxc-parser": "0.159.0",
+		"picomatch": "4.0.7",
+		"typescript": "^7.0.2"
+	}
+}

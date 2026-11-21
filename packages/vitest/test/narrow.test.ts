@@ -2,8 +2,8 @@ import { execFileSync, spawn } from 'node:child_process'
 import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
-import { difference, Narrowing, resolveDigest } from '../../shared/src/narrow.ts'
-import { analyze, footer } from '../../shared/src/units.ts'
+import { difference, Narrowing, resolveDigest } from '../../core/src/narrow.ts'
+import { analyze, footer } from '../../core/src/units.ts'
 import { packageRoot } from './harness.ts'
 
 const vitestBin = path.join(packageRoot, 'node_modules', 'vitest', 'vitest.mjs')

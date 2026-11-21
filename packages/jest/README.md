@@ -56,6 +56,9 @@ and `--shard` are supported. Requires Node 22.15 or newer and Jest 29 or newer.
   touches its dependency fields reruns nothing by itself. A new version of a
   package Jest's own process or a transformer loaded runs everything.
 
+A `package.json` or `tsconfig*.json` in a directory below the project reruns
+the test files that loaded a file under that directory.
+
 Changes to anything else in `package.json`, to `tsconfig.json`, `jest.config.*`,
 `babel.config.*`, `.babelrc`, `.swcrc`, the workflow file, or anything the
 config file imports or `globalSetup` loads or reads run everything. So does a run with coverage, and watch

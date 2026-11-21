@@ -5,7 +5,7 @@ import {
 	packageOf,
 	readDuringLoad,
 	repositoryPackage,
-} from '../../shared/src/packages.ts'
+} from '../../core/src/packages.ts'
 import Module, { createRequire, syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
@@ -21,8 +21,8 @@ import {
 	copyProperties,
 	isIgnored,
 	wrapFs,
-} from '../../shared/src/fs-recorder.ts'
-import type { SpecRecord } from './core.ts'
+} from '../../core/src/fs-recorder.ts'
+import type { RunFile } from '../../core/src/record.ts'
 import { ENV_COMMIT, ENV_RUN, dataDir } from './paths.ts'
 import { unionPieces, type Piece } from './pieces.ts'
 
@@ -138,8 +138,8 @@ function install(): void {
 	const recordChild = path.resolve(
 		here,
 		source
-			? '../../shared/src/record-child.ts'
-			: '../../shared/src/record-child.js',
+			? '../../core/src/record-child.ts'
+			: '../../core/src/record-child.js',
 	)
 	/** The plugin's own modules, which are no test's dependency. */
 	const ownDirs = [here + path.sep, path.dirname(recordChild) + path.sep]
@@ -283,8 +283,8 @@ function install(): void {
 	function readByPackage(): boolean {
 		return readDuringLoad(
 			(line) =>
-				line.includes(`${path.sep}shared${path.sep}src${path.sep}fs-recorder.`) ||
-				line.includes(`${path.sep}shared${path.sep}src${path.sep}packages.`) ||
+				line.includes(`${path.sep}core${path.sep}src${path.sep}fs-recorder.`) ||
+				line.includes(`${path.sep}core${path.sep}src${path.sep}packages.`) ||
 				line.includes(here),
 			(line) => line.includes('node:internal/modules'),
 		)
@@ -745,21 +745,23 @@ function install(): void {
 		for (const spec of specs) {
 			const entry = files.get(spec)
 			if (!entry) continue
-			const tests: SpecRecord['tests'] = {}
+			const tests: RunFile['tests'] = {}
 			for (const [title, test] of entry.tests) {
 				if (test.state === undefined) continue
 				tests[title] = {
-					state: test.state,
+					state: test.state === 'pending' ? 'skipped' : test.state,
 					deps: [...test.deps].sort(),
 					endpoints: [...test.endpoints].sort(),
 				}
 			}
 			piece.files[spec] = {
 				all: [...new Set(entry.all)],
-				hookFailed: entry.hookFailed,
-				hooks: [...entry.hooks].sort(),
-				hookEndpoints: [...entry.hookEndpoints].sort(),
+				// What the file's hooks read and wrote to: every test in it depends on them.
+				deps: [...entry.hooks].sort(),
+				endpoints: [...entry.hookEndpoints].sort(),
 				tests,
+				// A suite hook failed, so tests under it never ran.
+				...(entry.hookFailed ? { failed: true } : {}),
 			}
 			// A worker loads its next spec file into the same process.
 			files.delete(spec)

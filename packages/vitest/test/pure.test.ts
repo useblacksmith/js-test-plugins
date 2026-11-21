@@ -1,7 +1,7 @@
 import vm from 'node:vm'
 import { expect, test } from 'vitest'
-import { resolveDigest } from '../../shared/src/narrow.ts'
-import { analyze } from '../../shared/src/units.ts'
+import { resolveDigest } from '../../core/src/narrow.ts'
+import { analyze } from '../../core/src/units.ts'
 
 /**
  * Checks what the analysis calls free of effects against the engine: modules

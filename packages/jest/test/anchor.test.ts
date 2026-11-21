@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 
-import { anchorTree } from '../../shared/src/git.ts'
+import { anchorTree } from '../../core/src/git.ts'
 
 test('a record of thousands of paths anchors as the same paths a few at a time do', async () => {
 	const repo = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'bsm-anchor-')))
