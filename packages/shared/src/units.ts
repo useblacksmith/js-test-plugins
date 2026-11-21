@@ -298,6 +298,43 @@ function effects(node: Node | null | undefined, scope: Module): boolean {
 	return false
 }
 
+/** The names that lead from a value to what holds its methods, or to code made from a string. */
+const REACH = new Set(['prototype', '__proto__', 'constructor', 'getPrototypeOf', 'setPrototypeOf', 'Reflect', 'Function', 'eval'])
+
+/**
+ * Whether `node` has a way to what holds the language's own methods other than
+ * by the name of a builtin: one of the names above, or a key that is worked out
+ * as it runs and so may be one of them.
+ */
+function reaches(node: Node | null | undefined): boolean {
+	if (!node || typeof node !== 'object') return false
+	if (Array.isArray(node)) return node.some(reaches)
+	if (typeof node.type !== 'string') return false
+	if (node.type === 'WithStatement') return true
+	if (node.type === 'Identifier') return REACH.has(node.name)
+	// A type runs nothing.
+	if ((node.type.startsWith('TS') && !VALUE_TS.has(node.type)) || node.importKind === 'type' || node.exportKind === 'type') {
+		return false
+	}
+	// A key that is read: of a value, or of what is taken apart. One that a class or an object literal declares is its own.
+	const reads: Node[] = node.type === 'MemberExpression' ? [node] : node.type === 'ObjectPattern' ? node.properties : []
+	for (const read of reads) {
+		const key: Node | undefined = read.type === 'MemberExpression' ? read.property : read.key
+		if (!key) continue
+		if (read.computed ? key.type !== 'Literal' || REACH.has(key.value) : REACH.has(key.name ?? key.value)) return true
+	}
+	if (node.type === 'MemberExpression') return reaches(node.object)
+	for (const key in node) {
+		if (key === 'type' || key === 'start' || key === 'end') continue
+		// The name of a key is not the name of a value.
+		if (key === 'key' && !node.computed) continue
+		if (key === 'typeAnnotation' || key === 'typeArguments' || key === 'typeParameters' || key === 'returnType') continue
+		const child = node[key]
+		if (child && typeof child === 'object' && reaches(child)) return true
+	}
+	return false
+}
+
 /**
  * The top-level declarations and statements of `program` that may do more than
  * make a value, read in the order they are evaluated. A `const` counts as
@@ -306,17 +343,20 @@ function effects(node: Node | null | undefined, scope: Module): boolean {
 function loud(program: Node, own: (name: string) => boolean, code: string): Set<Node> {
 	const found = new Set<Node>()
 	const names = new Map<string, boolean>()
+	let reached: boolean | undefined
 	const scope: Module = {
 		own,
 		taken(name) {
 			// Most modules never write the name at all.
-			if (!names.has(name)) names.set(name, code.includes(name) && taken(program, name))
+			// An escape may spell the name.
+			if (!names.has(name)) names.set(name, (code.includes(name) || code.includes('\\u')) && taken(program, name))
 			return names.get(name)!
 		},
 		fns: new Map(),
-		// By the text alone: a method replaced there runs wherever the language calls it itself.
-		// An escape may spell any of these names, here or where `taken` looks for one.
-		patched: /prototype|PrototypeOf|__proto__|\\u/.test(code),
+		// A method replaced there runs wherever the language calls it itself. Looked for when a call is first asked about.
+		get patched() {
+			return (reached ??= reaches(program))
+		},
 		root: new Scope(),
 		budget: { left: 20000 },
 	}

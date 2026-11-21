@@ -455,6 +455,13 @@ describe('narrow: module digests', () => {
 			['function patch() { Object.prototype.toString = c }', 'String(P)'],
 			['function patch() { \\u0041rray.from = c }', "['b'].map((b) => b)"],
 			['function patch() { Object.getPrototypeOf([]).map = c }', "['b'].map((b) => b)"],
+			// A key worked out as it runs, or taken apart, may be the one that leads to an array's methods.
+			["function patch() { []['__pro' + 'to__'].map = c }", "['b'].map((b) => b)"],
+			['function patch(d: string) { const e: any = []; e[d].map = c }', "['b'].map((b) => b)"],
+			['function patch(d: string) { const { [d]: e } = [] as any; e.map = c }', "['b'].map((b) => b)"],
+			['function patch() { const { constructor: e } = []; e.from = c }', "['b'].map((b) => b)"],
+			['function patch() { c([].constructor) }', "['b'].map((b) => b)"],
+			['function patch(d: string) { Reflect.get([], d).map = c }', "['b'].map((b) => b)"],
 			['function fixed(b: string) { const d = b; d = b; return d }', 'fixed(P.b)'],
 			['@c class C {}', 'Object.values(P)'],
 			['export default c()', 'Object.values(P)'],
@@ -463,7 +470,7 @@ describe('narrow: module digests', () => {
 			expect(read(code, before), `${before}; ${code}`).toBe(true)
 		}
 		// What only declares, or reads, leaves it as written.
-		for (const before of ['function c(d: Object): Object { return d as Object }', 'type T = Record<string, Object>', "import type { Object } from './c.ts'", 'function c() { return Object.freeze({ Object: 1 }) }', 'function c() { P.b = 1 }', 'const M = () => c(P)', 'const M = P.d', 'type T = typeof P', 'export { P }']) {
+		for (const before of ['function c(d: Object): Object { return d as Object }', 'class C { constructor() {} }', "const M = { constructor: 1, d: 'caf\\u00e9' }", 'const M = [1][0]', 'type T = Record<string, Object>', "import type { Object } from './c.ts'", 'function c() { return Object.freeze({ Object: 1 }) }', 'function c() { P.b = 1 }', 'const M = () => c(P)', 'const M = P.d', 'type T = typeof P', 'export { P }']) {
 			expect(read('Object.values(P)', before), before).toBeUndefined()
 		}
 		// A name of the module's own is not the language's.
