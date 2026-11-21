@@ -36,6 +36,8 @@ const ALWAYS = [
 	'.mocharc.yml',
 	'.mocharc.jsonc',
 	'.mocharc.json',
+	// Its `mocha` field holds options as well; compared without its dependency fields unless a test read it.
+	'package.json',
 	CONFIG_FILE,
 ]
 
