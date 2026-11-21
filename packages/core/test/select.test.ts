@@ -136,6 +136,18 @@ test('a manifest above a test file or above what it loaded runs it', () => {
 	)
 })
 
+test('a manifest above a file reached only through the import graph runs the test file', () => {
+	const stored = records(
+		{ 'test/a.test.js': {}, 'test/b.test.js': {} },
+		{ graph: { 'test/a.test.js': ['src/a.js'], 'src/a.js': ['lib/deep/x.js'] } },
+	)
+	const specs = Object.keys(stored.files)
+	assert.deepEqual(reasons(select(stored, specs, ['lib/deep/package.json'])), {
+		'test/a.test.js': 'changed: lib/deep/package.json',
+		'test/b.test.js': null,
+	})
+})
+
 test('a manifest above what one test read runs that test alone', () => {
 	const stored = records({
 		'test/a.test.js': {

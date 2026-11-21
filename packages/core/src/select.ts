@@ -238,9 +238,8 @@ export function select(
 			if (!deps.has(file)) return false
 			return file === own || !policy.affects || policy.affects(spec, file)
 		})
-		hit ??= manifests.find(
-			({ dir }) => under(own, dir) || entry.deps.some((file) => under(file, dir)),
-		)?.file
+		// Through the import graph too: a runner that records only what a test file imports directly names the rest there.
+		hit ??= manifests.find(({ dir }) => [...deps].some((file) => under(file, dir)))?.file
 		if (hit === undefined && entry.incomplete) hit = lockfile
 		if (hit !== undefined) {
 			result[spec] = { run: true, reason: `changed: ${hit}`, stale: true }
@@ -259,7 +258,7 @@ export function select(
 				const read = reach(test.deps)
 				const dep =
 					changed.find((file) => read.has(file)) ??
-					manifests.find(({ dir }) => test.deps?.some((file) => under(file, dir)))?.file
+					manifests.find(({ dir }) => [...read].some((file) => under(file, dir)))?.file
 				if (dep !== undefined) tests.push({ title, reason: `changed: ${dep}`, stale: true })
 			}
 		}
