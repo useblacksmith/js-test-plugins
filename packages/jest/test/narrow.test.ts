@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { after, before, describe, test } from 'node:test'
 
 import { coverageFlag } from '../src/index.ts'
+import { projectName } from '../src/state.ts'
 import { Repo } from './harness.ts'
 
 const ALL = ['add', 'capped', 'double', 'shout']
@@ -100,6 +101,17 @@ test('the command line turns off coverage the config turns on', () => {
 	assert.equal(coverageFlag(['--runInBand']), undefined)
 })
 
+test('two projects without a name on one rootDir have a name each', () => {
+	const a = projectName({ id: 'one', rootDir: '/repo' }, '/repo')
+	const b = projectName({ id: 'two', rootDir: '/repo' }, '/repo')
+	assert.notEqual(a, b)
+	assert.equal(projectName({ displayName: 'unit', id: 'one' }, '/repo'), 'unit')
+	assert.equal(
+		projectName({ displayName: { name: 'unit' }, id: 'one' }, '/repo'),
+		'unit',
+	)
+})
+
 describe('a test file two projects run', () => {
 	let repo: Repo
 	before(() => {
@@ -121,20 +133,58 @@ describe('a test file two projects run', () => {
 	})
 	after(() => repo.cleanup())
 
-	test('records what it loaded in each project', () => {
+	/** The projects whose copy of the test file a run passed. */
+	const passed = (output: string): string[] =>
+		[...output.matchAll(/^PASS (\w+) test\/which\.test\.js$/gm)]
+			.map((match) => match[1] ?? '')
+			.sort()
+
+	test('records what it loaded in each project, a row per project', () => {
 		const result = repo.jest('--runInBand')
 		assert.equal(result.status, 0, result.output)
-		const deps = repo.records().files['test/which.test.js']?.deps ?? []
-		assert.ok(deps.includes('src/lib-a.js'), deps.join())
-		assert.ok(deps.includes('src/lib-b.js'), deps.join())
+		const { files } = repo.records()
+		for (const [name, other] of [
+			['a', 'b'],
+			['b', 'a'],
+		]) {
+			const deps = files[`test/which.test.js\0${name}`]?.deps ?? []
+			assert.ok(deps.includes(`src/lib-${name}.js`), deps.join())
+			assert.ok(!deps.includes(`src/lib-${other}.js`), deps.join())
+		}
+		assert.equal(files['test/which.test.js'], undefined)
 	})
 
 	for (const name of ['a', 'b']) {
-		test(`reruns for a change only project ${name} resolves`, () => {
+		test(`reruns in project ${name} alone for a change only it resolves`, () => {
 			repo.write(`src/lib-${name}.js`, 'export const which = () => 2 - 1\n')
 			const result = repo.jest('--runInBand')
 			assert.equal(result.status, 0, result.output)
-			assert.deepEqual(Repo.ran(result), ['which'])
+			assert.deepEqual(passed(result.output), [name])
 		})
 	}
+
+	test('two shards each run it in a project of their own, and rerun it for their own project alone', () => {
+		const shards = (): string[][] =>
+			[1, 2].map((shard) => {
+				const result = repo.jest(
+					'--runInBand',
+					'--shard',
+					`${shard}/2`,
+					'--passWithNoTests',
+				)
+				assert.equal(result.status, 0, result.output)
+				return passed(result.output)
+			})
+		// Jest gives each shard one of the two copies.
+		const first = shards()
+		assert.deepEqual(first.flat().sort(), ['a', 'b'])
+		assert.deepEqual(first.map((names) => names.length), [1, 1])
+		assert.deepEqual(shards(), [[], []])
+		repo.write('src/lib-b.js', 'export const which = () => 3 - 2\n')
+		assert.deepEqual(
+			shards(),
+			first.map((names) => names.filter((name) => name === 'b')),
+		)
+		assert.deepEqual(shards(), [[], []])
+	})
 })

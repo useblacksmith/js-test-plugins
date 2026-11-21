@@ -51,6 +51,8 @@ const raw = {
 /** What one test file loaded, as the process that ran it wrote it. Paths are absolute. */
 export interface Piece {
 	test: string
+	/** The project that ran it (see `projectName`). */
+	project?: string
 	/** Modules loaded and files whose content was read. */
 	deps: string[]
 	/** Paths only asked about (`stat`, `exists`): a dependency unless it is a directory. */
@@ -78,6 +80,7 @@ function readByTest(): boolean {
 
 interface Current {
 	test: string
+	project: string | undefined
 	deps: Set<string>
 	probes: Set<string>
 	manifests: Set<string>
@@ -195,6 +198,7 @@ let begun = 0
 export function begin(
 	test: string,
 	sandboxEnv: NodeJS.ProcessEnv | undefined,
+	project?: string,
 ): void {
 	const dir = root()
 	if (!dir) return
@@ -213,6 +217,7 @@ export function begin(
 	if (sandboxEnv) childEnvironment(sandboxEnv, childDir)
 	current = {
 		test,
+		project,
 		deps: new Set(),
 		probes: new Set(),
 		manifests: new Set(),
@@ -254,6 +259,7 @@ export function end(
 	} catch {}
 	const piece: Piece = {
 		test: done.test,
+		...(done.project === undefined ? {} : { project: done.project }),
 		deps: [...done.deps],
 		probes: [...done.probes].filter((file) => !done.deps.has(file)),
 		manifests: [...done.manifests],

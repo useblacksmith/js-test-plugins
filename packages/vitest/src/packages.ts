@@ -258,6 +258,8 @@ export async function updatePackages(
 	recordRoot: string | undefined,
 	partial: boolean,
 	bundled: readonly string[],
+	/** Test files (repo-relative) the shard runs in some of their projects only. */
+	split: ReadonlySet<string> = new Set(),
 ): Promise<void> {
 	const records = (await readPackages(dir)) ?? {
 		version: PACKAGES_VERSION,
@@ -308,10 +310,11 @@ export async function updatePackages(
 	}
 	// A run narrowed by `--project` saw a shared test file in some of its
 	// projects only, and a partial one (`-t`, `.only`, a line filter) ran
-	// some of a file's tests only: what the rest loaded stays.
+	// some of a file's tests only, as did a shard that has a test file in
+	// some of its projects only: what the rest loaded stays.
 	const narrowed = vitest.config.project.length > 0
 	for (const [test, dirs] of fresh) {
-		if (narrowed || partial) {
+		if (narrowed || partial || split.has(test)) {
 			for (const dir of records.files[test] ?? []) dirs.add(dir)
 		}
 		// pnpm: a test also depends on the links that led to its packages.
@@ -324,7 +327,7 @@ export async function updatePackages(
 	const incomplete = new Set(unseen)
 	for (const test of records.incomplete ?? []) {
 		if (
-			(narrowed || partial || !fresh.has(test)) &&
+			(narrowed || partial || split.has(test) || !fresh.has(test)) &&
 			existsSync(path.join(repo, test))
 		) {
 			incomplete.add(test)

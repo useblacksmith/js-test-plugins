@@ -61,6 +61,33 @@ export interface State {
 	resolve: Resolve
 	/** Whether every project resolves modules the same way: `resolve` answers for one of them. */
 	oneResolver: boolean
+	/** Test files (absolute) several projects of the run have: the record keeps one of each per project. */
+	shared: Set<string>
+}
+
+/**
+ * A project's name in the record: its `displayName`, or the id Jest gives it.
+ * Projects without a name often share a `rootDir`; the id is one per project,
+ * made from the `rootDir`, the config's path and the project's position.
+ */
+export function projectName(
+	config:
+		| {
+				displayName?: string | { name?: string }
+				id?: string
+				rootDir?: string
+		  }
+		| undefined,
+	repo: string,
+): string {
+	const named = config?.displayName
+	const name = typeof named === 'string' ? named : named?.name
+	if (name) return name
+	if (config?.id) return config.id
+	return path
+		.relative(repo, config?.rootDir ?? repo)
+		.split(path.sep)
+		.join('/')
 }
 
 export type Resolve = (from: string, specifier: string) => string | null
@@ -92,6 +119,7 @@ export function state(): State {
 		narrow: false,
 		resolve: () => null,
 		oneResolver: true,
+		shared: new Set(),
 	})
 }
 

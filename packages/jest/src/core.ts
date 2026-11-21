@@ -24,6 +24,27 @@ export interface FileRecord {
 	at?: number
 }
 
+/**
+ * A test file's key in the record: its path, and the project too when
+ * several projects of the run have the file. Jest shards a test file once
+ * per project, so two shards may each run it in a project of their own.
+ */
+export function specKey(file: string, project?: string): string {
+	return project === undefined ? file : `${file}\0${project}`
+}
+
+/** The test file a key of the record is for. */
+export function specPath(spec: string): string {
+	const at = spec.indexOf('\0')
+	return at === -1 ? spec : spec.slice(0, at)
+}
+
+/** The project a key of the record is for, when it names one. */
+export function specProject(spec: string): string | undefined {
+	const at = spec.indexOf('\0')
+	return at === -1 ? undefined : spec.slice(at + 1)
+}
+
 /** What one Jest run recorded. Paths are repository-relative with `/`. */
 export interface RunRecord {
 	at: number
@@ -150,14 +171,15 @@ function changedDependency(
 	options: Options,
 	affects: Affects | undefined,
 ): string | undefined {
+	const own = specPath(spec)
 	const deps = new Set([
-		spec,
+		own,
 		...records.global,
 		...(records.files[spec]?.deps ?? []),
 	])
 	const globs: string[] = []
 	for (const [tests, files] of Object.entries(options.dependencies ?? {})) {
-		if (picomatch.isMatch(spec, tests, { dot: true }))
+		if (picomatch.isMatch(own, tests, { dot: true }))
 			globs.push(...list(files))
 	}
 	const matches =
@@ -166,7 +188,7 @@ function changedDependency(
 	return changed.find((file) => {
 		if (matches(file)) return true
 		if (!deps.has(file)) return false
-		return file === spec || global.has(file) || !affects || affects(spec, file)
+		return file === own || global.has(file) || !affects || affects(spec, file)
 	})
 }
 
@@ -267,7 +289,7 @@ export function mergeRecords(
 export function recordedPaths(records: Records): Set<string> {
 	const paths = new Set<string>(records.global)
 	for (const [spec, entry] of Object.entries(records.files)) {
-		paths.add(spec)
+		paths.add(specPath(spec))
 		for (const file of entry.deps) paths.add(file)
 	}
 	return paths

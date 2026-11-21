@@ -4,7 +4,7 @@ import { ENV_REPO } from '../../shared/src/fs-recorder.ts'
 import { HITS } from '../../shared/src/hits.ts'
 import { markTransforms } from './mark.ts'
 import { begin, end } from './record.ts'
-import { ENV_NARROW, ENV_RUNTIME, resolveFromJest } from './state.ts'
+import { ENV_NARROW, ENV_RUNTIME, projectName, resolveFromJest } from './state.ts'
 
 /**
  * The `runtime` of a project config: the project's own `jest-runtime`, which
@@ -49,6 +49,7 @@ export default class BlacksmithRuntime extends Base {
 			begin(
 				testPath,
 				(args[1] as Environment | undefined)?.global?.process?.env,
+				projectName(args[0] as Parameters<typeof projectName>[0], repo ?? ''),
 			)
 		}
 	}

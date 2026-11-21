@@ -1,11 +1,5 @@
 import path from 'node:path'
-
-import { shardFor } from '../../shared/src/shard.js'
-
-export { shardFor }
-
 import {
-	BaseSequencer,
 	type ResolvedConfig,
 	type TestSpecification,
 	type Vitest,
@@ -16,33 +10,14 @@ const WRAPPED = Symbol.for('blacksmith.vitest.sequencer.wrapped')
 
 type SequencerClass = ResolvedConfig['sequence']['sequencer']
 
-/**
- * The name of the configured sequencer when it is not Blacksmith's (nor a
- * subclass of it), `null` when it is. Another plugin or the config may have
- * replaced `sequence.sequencer` after this plugin's `config()` ran.
- */
-export function customSequencer(sequencer: unknown): string | null {
-	if (typeof sequencer !== 'function') return null
-	if ((sequencer as { [BRAND]?: boolean })[BRAND] === true) return null
-	return sequencer.name || 'anonymous sequencer'
-}
-
-export function inShard(
-	root: string,
-	moduleId: string,
-	shard: { index: number; count: number } | undefined,
-): boolean {
-	if (!shard) return true
+/** Whether the configured sequencer is already the wrapper `stableShards` makes, of this or another copy of the module. */
+export function isStable(sequencer: unknown): boolean {
 	return (
-		shardFor(path.relative(root, moduleId), shard.count) === shard.index - 1
+		typeof sequencer === 'function' &&
+		(sequencer as { [BRAND]?: boolean })[BRAND] === true
 	)
 }
 
-/**
- * Replaces vitest's contiguous slices: a test stays in the same shard when
- * other tests are added, removed or filtered out by `--changed`, so each
- * shard's dependency record only ever has to vouch for its own tests.
- */
 /**
  * Vitest hands `shard()` the specs `--changed` kept, so a sequencer that
  * slices by position moves tests between shards as the selection changes,
@@ -63,41 +38,55 @@ export function stableShards(Theirs: SequencerClass): SequencerClass {
 			files: TestSpecification[],
 		): Promise<TestSpecification[]> => {
 			const owns = await shardOwner(this.#vitest)
-			return files.filter((file) => owns(file.moduleId))
+			return files.filter((file) => owns(file.moduleId, file.project.name))
 		}
 	}
 }
 
+type Owns = (moduleId: string, project?: string) => boolean
+
+/** The answer for the test files a run listed last, so that one run asks its sequencer once. */
+const ownedBy = new WeakMap<Vitest, { listed: string; owns: Owns }>()
+
 /**
- * Which tests this shard runs, independent of the selection: by path hash
- * under Blacksmith's sequencer, by the wrapped sequencer's own `shard()`
- * over the full test list otherwise.
+ * Which tests this shard runs, independent of the selection: by the
+ * sequencer's own `shard()`, Vitest's or the config's, over the full test
+ * list.
  */
 export async function shardOwner(
 	vitest: Vitest,
-): Promise<(moduleId: string) => boolean> {
-	const { root, shard } = vitest.config
-	if (!shard) return () => true
-	const Theirs = (
-		vitest.config.sequence.sequencer as { [WRAPPED]?: SequencerClass }
-	)[WRAPPED]
-	if (!Theirs) return (moduleId) => inShard(root, moduleId, shard)
-	const owned = new Set(
-		(await new Theirs(vitest).shard(await vitest.globTestSpecifications())).map(
-			(specification) => specification.moduleId,
-		),
+): Promise<Owns> {
+	if (!vitest.config.shard) return () => true
+	const configured = vitest.config.sequence.sequencer
+	const Theirs =
+		(configured as { [WRAPPED]?: SequencerClass })[WRAPPED] ?? configured
+	// Vitest lists the specifications of the project whose files it found
+	// first, first, and its sequencer keeps that order for a test file two
+	// projects have. In the projects' own order every shard, and every call
+	// here, splits them the same way.
+	const at = new Map(vitest.projects.map((project, index) => [project, index]))
+	const every = [...(await vitest.globTestSpecifications())].sort(
+		(a, b) => (at.get(a.project) ?? 0) - (at.get(b.project) ?? 0),
 	)
-	return (moduleId) => owned.has(moduleId)
-}
-
-export class HashShardSequencer extends BaseSequencer {
-	/** Marks this class and its subclasses, across copies of the module. */
-	static readonly [BRAND] = true
-
-	override async shard(
-		files: TestSpecification[],
-	): Promise<TestSpecification[]> {
-		const { root, shard } = this.ctx.config
-		return files.filter((file) => inShard(root, file.moduleId, shard))
+	const listed = every
+		.map((specification) => `${specification.project.name}\0${specification.moduleId}`)
+		.join('\n')
+	const known = ownedBy.get(vitest)
+	if (known?.listed === listed) return known.owns
+	// A sequencer shards specifications, so a test file of two projects can be on two shards.
+	const owned = new Map<string, Set<string>>()
+	for (const specification of await new Theirs(vitest).shard(every)) {
+		const projects = owned.get(specification.moduleId) ?? new Set()
+		projects.add(specification.project.name)
+		owned.set(specification.moduleId, projects)
 	}
+	// Vitest names a test file with `/` on every platform; a path resolved here has `\\` on Windows.
+	const owns: Owns = (moduleId, project) => {
+		const projects = owned.get(moduleId.split(path.sep).join('/'))
+		return project === undefined
+			? projects !== undefined
+			: projects?.has(project) === true
+	}
+	ownedBy.set(vitest, { listed, owns })
+	return owns
 }

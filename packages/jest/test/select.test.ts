@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { after, before, describe, test } from 'node:test'
 
-import { shardFor } from '../../shared/src/shard.ts'
 import { Repo } from './harness.ts'
 
 const ALL = ['a', 'b', 'c', 'child']
@@ -195,32 +194,31 @@ describe('shards', () => {
 	})
 	after(() => repo.cleanup())
 
-	const owned = (shard: number): string[] =>
-		ALL.filter((name) => shardFor(`test/${name}.test.js`, 2) === shard - 1)
+	/** What each of the two shards ran when everything ran. */
+	const owned: string[][] = []
 
-	test('a shard runs the test files whose path hashes to it and keeps a record of its own', () => {
+	test("the shards are Jest's own: between them they run every test file once, and each keeps a record", () => {
 		for (const shard of [1, 2]) {
 			const result = repo.jest('--shard', `${shard}/2`, '--passWithNoTests')
 			assert.equal(result.status, 0, result.output)
-			assert.deepEqual(Repo.ran(result), owned(shard))
+			owned.push(Repo.ran(result))
 			assert.deepEqual(
 				Object.keys(repo.records(`.${shard}of2`).files).sort(),
-				owned(shard).map((name) => `test/${name}.test.js`),
+				Repo.ran(result).map((name) => `test/${name}.test.js`),
 			)
 		}
-		assert.deepEqual([...owned(1), ...owned(2)].sort(), ALL)
+		assert.deepEqual(owned.flat().sort(), ALL)
 	})
 
-	test('a new test file moves no other test file to another shard', () => {
-		repo.write('test/d.test.js', "test('d', () => {})\n")
-		for (const shard of [1, 2]) {
-			const ran = Repo.ran(
-				repo.jest('--shard', `${shard}/2`, '--passWithNoTests'),
-			)
-			assert.deepEqual(
-				ran,
-				shardFor('test/d.test.js', 2) === shard - 1 ? ['d'] : [],
-			)
+	test('a change reruns its test files on the shard that ran them, and nothing on the other', () => {
+		repo.append('src/a.js', '// edit\n')
+		const ran = [1, 2].map((shard) =>
+			Repo.ran(repo.jest('--shard', `${shard}/2`, '--passWithNoTests')),
+		)
+		assert.ok(ran.flat().length > 0)
+		assert.equal(new Set(ran.flat()).size, ran.flat().length)
+		for (const [at, names] of ran.entries()) {
+			for (const name of names) assert.ok(owned[at]?.includes(name), name)
 		}
 	})
 })
