@@ -42,7 +42,10 @@ and `--shard` are supported. Requires Node 22.15 or newer and Jest 29 or newer.
 - **`-t`.** A run with `--testNamePattern` runs part of a test file. After a
   change the file stays selected until a run without the pattern passes.
 - **Shards.** `--shard` assigns test files as Jest does without the plugin,
-  over every test file and before any is left out. Each shard saves a record of
+  over every test file and before any is left out. Jest shards a test file
+  once per project, so the record keeps a row per project for a test file
+  several projects have, and two shards may each run it in a project of their
+  own. Each shard saves a record of
   its own to the Actions cache and looks up the records of all shards, so
   changing the shard count reruns nothing.
 

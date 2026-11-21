@@ -9,6 +9,9 @@ import {
 	loadRecords,
 	recordedPaths,
 	storeRecords,
+	specKey,
+	specPath,
+	specProject,
 	type StoredRecords,
 	select,
 	type Affects,
@@ -29,7 +32,14 @@ import {
 } from './project.ts'
 import { affecting, mergeUnits } from './narrow.ts'
 import { recordGlobals } from './record.ts'
-import { dataDir, log, resolveFromJest, state, type Pending } from './state.ts'
+import {
+	dataDir,
+	log,
+	projectName,
+	resolveFromJest,
+	state,
+	type Pending,
+} from './state.ts'
 
 /**
  * The `testSequencer`: Jest hands it every test file it is about to run, and
@@ -40,6 +50,7 @@ import { dataDir, log, resolveFromJest, state, type Pending } from './state.ts'
 interface Test {
 	path: string
 	context?: {
+		config?: Parameters<typeof projectName>[0]
 		resolver?: { resolveModule?: (from: string, specifier: string) => string }
 	}
 }
@@ -104,6 +115,23 @@ export default class BlacksmithSequencer extends Base {
 			process.argv.some((arg) => arg === '--watch' || arg === '--watchAll')
 		if (watching) return super.sort(tests)
 		let selected = tests
+		// A test file several projects have is a test file of each: Jest shards
+		// them apart, and the record keeps one per project.
+		const projects = new Map<string, Set<unknown>>()
+		for (const test of this.everyTest ?? tests) {
+			const of = projects.get(test.path) ?? new Set()
+			projects.set(test.path, of.add(test.context))
+		}
+		ctx.shared = new Set(
+			[...projects].filter(([, of]) => of.size > 1).map(([file]) => file),
+		)
+		const keyOf = (test: Test): string =>
+			specKey(
+				toRelative(ctx.repo, test.path),
+				ctx.shared.has(test.path)
+					? projectName(test.context?.config, ctx.repo)
+					: undefined,
+			)
 		const resolvers = new Set(
 			(this.everyTest ?? tests).flatMap((test) => test.context?.resolver ?? []),
 		)
@@ -119,14 +147,13 @@ export default class BlacksmithSequencer extends Base {
 		}
 		try {
 			const pending = await affected(
-				tests.map((test) => toRelative(ctx.repo, test.path)),
+				[...new Set(tests.map(keyOf))],
 				ctx.coverage || config?.collectCoverage === true,
 			)
 			ctx.pending = pending
 			describe(pending)
 			selected = tests.filter(
-				(test) =>
-					pending.selection[toRelative(ctx.repo, test.path)]?.run !== false,
+				(test) => pending.selection[keyOf(test)]?.run !== false,
 			)
 		} catch (error) {
 			ctx.pending = null
@@ -291,6 +318,8 @@ function describe(pending: Pending): void {
 	)
 	for (const [spec, decision] of run) {
 		if (decision.run)
-			process.stderr.write(`  run  ${spec}  (${decision.reason})\n`)
+			process.stderr.write(
+				`  run  ${specPath(spec)}  (${specProject(spec) === undefined ? '' : `in ${specProject(spec)}, `}${decision.reason})\n`,
+			)
 	}
 }

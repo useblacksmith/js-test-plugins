@@ -9,7 +9,7 @@ import {
 } from '../../shared/src/narrow.ts'
 import { isPackagePath } from '../../shared/src/packages.ts'
 import { analyze } from '../../shared/src/units.ts'
-import type { Affects, Records } from './core.ts'
+import { specPath, type Affects, type Records } from './core.ts'
 import { sourceFile } from './mark.ts'
 import { readJson } from './project.ts'
 import { dataDir, suffix, type Resolve, type Shard, type State } from './state.ts'
@@ -171,7 +171,7 @@ export function affecting(
 		const entry = records.files[spec]
 		if (!entry) return true
 		let deps = loaded.get(spec)
-		if (!deps) loaded.set(spec, (deps = new Set([spec, ...entry.deps])))
+		if (!deps) loaded.set(spec, (deps = new Set([specPath(spec), ...entry.deps])))
 		return narrowing.affects(file, { deps, ran: units.tests[spec] })
 	}
 }
@@ -216,7 +216,7 @@ export function updateUnits(
 	}
 	const modules = new Set<string>()
 	for (const [spec, entry] of Object.entries(records.files)) {
-		modules.add(spec)
+		modules.add(specPath(spec))
 		for (const file of entry.deps) {
 			if (CODE.test(file) && !isPackagePath(file)) modules.add(file)
 		}

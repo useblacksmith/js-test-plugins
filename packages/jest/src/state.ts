@@ -61,6 +61,24 @@ export interface State {
 	resolve: Resolve
 	/** Whether every project resolves modules the same way: `resolve` answers for one of them. */
 	oneResolver: boolean
+	/** Test files (absolute) several projects of the run have: the record keeps one of each per project. */
+	shared: Set<string>
+}
+
+/** A project's name in the record: its `displayName`, or its `rootDir` from the repository. */
+export function projectName(
+	config:
+		| { displayName?: string | { name?: string }; rootDir?: string }
+		| undefined,
+	repo: string,
+): string {
+	const named = config?.displayName
+	const name = typeof named === 'string' ? named : named?.name
+	if (name) return name
+	return path
+		.relative(repo, config?.rootDir ?? repo)
+		.split(path.sep)
+		.join('/')
 }
 
 export type Resolve = (from: string, specifier: string) => string | null
@@ -92,6 +110,7 @@ export function state(): State {
 		narrow: false,
 		resolve: () => null,
 		oneResolver: true,
+		shared: new Set(),
 	})
 }
 

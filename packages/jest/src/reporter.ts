@@ -14,6 +14,9 @@ import {
 	type RunRecord,
 	type TestState,
 	loadRecords,
+	specKey,
+	specPath,
+	specProject,
 	type StoredRecords,
 } from './core.ts'
 import {
@@ -27,7 +30,7 @@ import {
 import { isPackagePath, PackageLinks } from '../../shared/src/packages.ts'
 import { dropUnits, updateUnits } from './narrow.ts'
 import { endGlobals, type Piece } from './record.ts'
-import { ENV_RECORD, log, state } from './state.ts'
+import { ENV_RECORD, log, projectName, state } from './state.ts'
 
 /**
  * The reporter: collects how each test ended, and when the run is over joins
@@ -67,8 +70,17 @@ export default class BlacksmithReporter {
 		endGlobals()
 	}
 
-	onTestResult(_test: unknown, result: TestResult): void {
-		const file = toRelative(state().repo, result.testFilePath)
+	onTestResult(
+		test: { context?: { config?: Parameters<typeof projectName>[0] } } | undefined,
+		result: TestResult,
+	): void {
+		const ctx = state()
+		const file = specKey(
+			toRelative(ctx.repo, result.testFilePath),
+			ctx.shared.has(result.testFilePath)
+				? projectName(test?.context?.config, ctx.repo)
+				: undefined,
+		)
 		this.results.set(file, [...(this.results.get(file) ?? []), result])
 	}
 
@@ -90,7 +102,7 @@ export default class BlacksmithReporter {
 		const pending = ctx.pending
 		ctx.pending = null
 		if (!pending || !root) return
-		const { deps, global, manifests, ran } = readPieces(root, ctx.repo)
+		const { deps, global, manifests, ran } = readPieces(root, ctx.repo, ctx.shared)
 		const links = new PackageLinks(ctx.repo)
 		const run: RunRecord = {
 			at: Date.now(),
@@ -119,7 +131,7 @@ export default class BlacksmithReporter {
 				}
 			}
 			const entry: FileRecord = {
-				deps: links.expand(recorded ?? [], [file]),
+				deps: links.expand(recorded ?? [], [specPath(file)]),
 				tests,
 			}
 			const read = [...(manifests.get(file) ?? [])].sort()
@@ -150,7 +162,14 @@ export default class BlacksmithReporter {
 			pending.affects,
 		)
 		for (const spec of Object.keys(merged.files)) {
-			if (!existsSync(path.join(ctx.repo, spec))) delete merged.files[spec]
+			const file = path.join(ctx.repo, specPath(spec))
+			// Deleted, or recorded before a second project had the file.
+			if (
+				!existsSync(file) ||
+				(specProject(spec) === undefined && ctx.shared.has(file))
+			) {
+				delete merged.files[spec]
+			}
 		}
 		merged.global = merged.global.filter(
 			(file) => !isPackagePath(file) || existsSync(path.join(ctx.repo, file)),
@@ -186,6 +205,7 @@ const TRANSFORM_CONFIG =
 function readPieces(
 	root: string,
 	repo: string,
+	shared: ReadonlySet<string>,
 ): {
 	deps: Map<string, Set<string>>
 	global: string[]
@@ -208,7 +228,10 @@ function readPieces(
 	for (const name of list(path.join(root, 'tests'))) {
 		const piece = readJson<Piece>(path.join(root, 'tests', name))
 		if (!piece) continue
-		const test = toRelative(repo, piece.test)
+		const test = specKey(
+			toRelative(repo, piece.test),
+			shared.has(piece.test) ? piece.project : undefined,
+		)
 		const files = deps.get(test) ?? new Set<string>()
 		deps.set(test, files)
 		const read = manifests.get(test) ?? new Set<string>()
