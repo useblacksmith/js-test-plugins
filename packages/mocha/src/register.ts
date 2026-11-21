@@ -816,7 +816,9 @@ function install(): void {
 		for (const test of entry?.tests.values() ?? []) roots.push(...test.deps)
 		const ran: Record<string, string[]> = {}
 		for (const module of new Set([...closure(edges, roots), ...(own?.keys() ?? [])])) {
-			if (readWhole.has(module)) whole.add(spec)
+			// Only a source file can have a function record to keep out; a fixture
+			// or a manifest read as text has none.
+			if (readWhole.has(module) && /\.[cm]?[jt]sx?$/.test(module)) whole.add(spec)
 			if (!marked.has(module) || readWhole.has(module)) continue
 			ran[module] = [
 				...new Set([...(enteredByAll.get(module) ?? []), ...(own?.get(module) ?? [])]),
