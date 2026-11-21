@@ -181,7 +181,7 @@ interface Scope {
 }
 
 /** Whether `node` is written as an object or an array, or names a `const` that is. */
-function object(node: Node | null | undefined, scope: Scope): boolean {
+function holder(node: Node | null | undefined, scope: Scope): boolean {
 	node = unwrap(node)
 	if (node?.type === 'Identifier') return scope.objects.has(node.name)
 	return node?.type === 'ObjectExpression' || node?.type === 'ArrayExpression'
@@ -228,6 +228,42 @@ function literal(node: Node | null | undefined, scope: Scope): boolean {
 	}
 }
 
+/**
+ * Whether the module names `Object` for more than reading a key off it: it may
+ * then bind the name in some scope, or put something of its own on it.
+ */
+function taken(node: Node | null | undefined, held = false): boolean {
+	if (!node || typeof node !== 'object') return false
+	if (Array.isArray(node)) return node.some((child) => taken(child))
+	if (typeof node.type !== 'string') return false
+	if (node.type === 'Identifier') return node.name === 'Object' && !held
+	if (node.type === 'MemberExpression') {
+		return taken(node.object, !node.computed) || (node.computed && taken(node.property))
+	}
+	// What is written to, or deleted, is not read.
+	const written =
+		node.type === 'AssignmentExpression'
+			? node.left
+			: node.type === 'UpdateExpression' || (node.type === 'UnaryExpression' && node.operator === 'delete')
+				? node.argument
+				: null
+	if (written?.type === 'MemberExpression' && rooted(written)) return true
+	for (const key in node) {
+		if (key === 'type' || key === 'start' || key === 'end') continue
+		// The name of a key is not the name of a value.
+		if (key === 'key' && !node.computed) continue
+		const child = node[key]
+		if (child && typeof child === 'object' && taken(child)) return true
+	}
+	return false
+}
+
+/** Whether a chain of keys starts at `Object`. */
+function rooted(node: Node): boolean {
+	while (node.type === 'MemberExpression') node = node.object
+	return node.type === 'Identifier' && node.name === 'Object'
+}
+
 /** `Object.keys(x)`, `Object.values(x)` or `Object.entries(x)` of a value of literals. */
 function reads(node: Node, scope: Scope): boolean {
 	if (node.type !== 'CallExpression' || node.optional || node.arguments.length !== 1) return false
@@ -237,7 +273,7 @@ function reads(node: Node, scope: Scope): boolean {
 	if (object?.type !== 'Identifier' || object.name !== 'Object' || scope.own('Object')) return false
 	if (callee.property.type !== 'Identifier' || !READS.has(callee.property.name)) return false
 	// Of `null`, or of a key the value does not have, the read throws.
-	return object(node.arguments[0], scope) && literal(node.arguments[0], scope)
+	return holder(node.arguments[0], scope) && literal(node.arguments[0], scope)
 }
 
 /**
@@ -282,7 +318,8 @@ function effects(node: Node | null | undefined, scope: Scope): boolean {
  */
 function loud(program: Node, own: (name: string) => boolean): Set<Node> {
 	const found = new Set<Node>()
-	const scope: Scope = { own, plain: new Set(), objects: new Set() }
+	const mine = taken(program)
+	const scope: Scope = { own: (name) => own(name) || (name === 'Object' && mine), plain: new Set(), objects: new Set() }
 	const visit = (node: Node, constant: boolean): void => {
 		if (effects(node, scope)) {
 			found.add(node)
@@ -290,7 +327,7 @@ function loud(program: Node, own: (name: string) => boolean): Set<Node> {
 			scope.objects.clear()
 		} else if (constant && node.id?.type === 'Identifier' && node.init && literal(node.init, scope)) {
 			scope.plain.add(node.id.name)
-			if (object(node.init, scope)) scope.objects.add(node.id.name)
+			if (holder(node.init, scope)) scope.objects.add(node.id.name)
 		}
 	}
 	for (const statement of program.body as Node[]) {

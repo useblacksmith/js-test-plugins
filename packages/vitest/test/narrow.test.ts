@@ -419,7 +419,7 @@ describe('narrow: module digests', () => {
 			expect(read(code, before), `${before}; ${code}`).toBe(true)
 		}
 		// What only declares, or reads, leaves it as written.
-		for (const before of ['function c() { P.b = 1 }', 'const M = () => c(P)', 'const M = P.d', 'type T = typeof P', 'export { P }']) {
+		for (const before of ['function c() { return Object.freeze({ Object: 1 }) }', 'function c() { P.b = 1 }', 'const M = () => c(P)', 'const M = P.d', 'type T = typeof P', 'export { P }']) {
 			expect(read('Object.values(P)', before), before).toBeUndefined()
 		}
 		// A name of the module's own is not the language's.
@@ -427,6 +427,12 @@ describe('narrow: module digests', () => {
 			"import { Object } from './c.ts'\nconst P = {}\nexport const a = Object.values(P)",
 			'const Object = c\nconst P = {}\nexport const a = Object.values(P)',
 			'function Object() {}\nconst P = {}\nexport const a = Object.values(P)',
+			'const P = {}\nexport const a = class Object { static b = Object.values(P) }',
+			'const P = {}\nfunction c(Object) {}\nexport const a = Object.values(P)',
+			'const P = {}\nfunction c() { Object.values = d }\nexport const a = Object.values(P)',
+			'const P = {}\nfunction c() { delete Object.values }\nexport const a = Object.values(P)',
+			'const P = {}\nfunction c() { d(Object) }\nexport const a = Object.values(P)',
+			'const P = {}\nfunction c() { Object[d] = e }\nexport const a = Object.values(P)',
 		]) {
 			expect(digest(code).units['a']?.effects, code).toBe(true)
 		}
