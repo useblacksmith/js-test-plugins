@@ -86,7 +86,7 @@ To record function entries the plugin adds one call at the start of each top-lev
 
 What narrowing cannot see: a test whose result depends on a function's source text or `length` rather than on calling it.
 
-A changed top-level value that calls something as it is evaluated (a call, `new`, a tagged template, an assignment, a class's static initializer) reruns every test file that loaded the module, since the call may have done more than make the value. A value of literals, objects, arrays, functions and other names reruns only the test files that loaded a module importing it. A value that is unchanged itself and is built from a changed one counts as the second kind.
+A changed top-level value that calls something as it is evaluated (a call, `new`, a tagged template, an assignment, a decorator, a class's static initializer) reruns every test file that loaded the module, since the call may have done more than make the value. So does an unchanged value built from a changed one. A value of literals, objects, arrays, functions and other names reruns only the test files that loaded a module importing it. So does `Object.keys`, `Object.values` or `Object.entries` of a `const` of literals declared in the same file, while no other call has run since it was declared: there is nothing of yours for such a read to run.
 
 ## Limits
 
