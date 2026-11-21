@@ -306,6 +306,19 @@ test('the graph is unioned across runs, without the edges out of a changed file'
 	assert.deepEqual(merged.graph, { 'src/a.js': ['src/b.js', 'src/e.js'], 'src/c.js': ['src/f.js'] })
 })
 
+test('a changed file no run loaded keeps its edges: a change that reaches no test leaves no run to record them again', () => {
+	const stored = records(
+		{ 'test/a.test.js': {} },
+		{ graph: { 'test/a.test.js': ['src/a.js'], 'src/a.js': ['src/b.js'] } },
+	)
+	const narrowed = { affects: () => false }
+	const merged = mergeRecords(stored, [], ['src/a.js'], narrowed)
+	assert.deepEqual(merged.graph['src/a.js'], ['src/b.js'])
+	assert.deepEqual(reasons(select(merged, ['test/a.test.js'], ['src/b.js'])), {
+		'test/a.test.js': 'changed: src/b.js',
+	})
+})
+
 test('the record is stored with each path once and read back as it was', () => {
 	const stored = records(
 		{

@@ -11,10 +11,23 @@ export interface Piece {
 	files: Record<string, RunFile>
 	/** Reads of a test of an earlier spec file that arrived after its `Runner` ended. */
 	late: Record<string, Record<string, string[]>>
+	/** Per spec file, module → the functions of it the file's tests and hooks entered; only modules whose marks ran. Absent when the process did not mark modules. */
+	ran?: Record<string, Record<string, string[]>>
+	/** Spec files that loaded a module read as text or run by a child process, which has no entry in `ran`. */
+	whole?: string[]
+	/** What a test of an earlier spec file entered after its `Runner` ended. */
+	lateRan?: Record<string, Record<string, string[]>>
+}
+
+/** A run's record with what each spec file entered, when every process of the run marked modules. */
+export interface MochaRun extends RunRecord {
+	ran?: Record<string, Record<string, string[]>>
+	/** Spec files with a module that is deliberately left out of `ran`. */
+	whole?: string[]
 }
 
 /** Unions the pieces of one run into its record. */
-export function unionPieces(pieces: Piece[]): RunRecord {
+export function unionPieces(pieces: Piece[]): MochaRun {
 	const graph: Record<string, string[]> = {}
 	const entries = new Set<string>()
 	const unattributed = new Set<string>()
@@ -42,5 +55,26 @@ export function unionPieces(pieces: Piece[]): RunRecord {
 			...unattributed,
 		]),
 	].sort()
-	return { at: Date.now(), graph, global, files }
+	let ran: MochaRun['ran']
+	if (pieces.length > 0 && pieces.every((piece) => piece.ran)) {
+		ran = {}
+		for (const piece of pieces) Object.assign(ran, piece.ran)
+		for (const piece of pieces) {
+			for (const [spec, modules] of Object.entries(piece.lateRan ?? {})) {
+				for (const [module, names] of Object.entries(modules)) {
+					// A module the spec file has no entry for stays without one: every change to it reruns the file.
+					const entered = ran[spec]?.[module]
+					if (entered) ran[spec]![module] = [...new Set([...entered, ...names])].sort()
+				}
+			}
+		}
+	}
+	const whole = pieces.flatMap((piece) => piece.whole ?? [])
+	return {
+		at: Date.now(),
+		graph,
+		global,
+		files,
+		...(ran ? { ran, ...(whole.length > 0 ? { whole } : {}) } : {}),
+	}
 }
