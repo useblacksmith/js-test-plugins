@@ -146,6 +146,12 @@ export interface Snapshot {
 	tests: string[]
 	/** When each of `tests` last ran and passed, in milliseconds: of the entries that vouch for a test file, the one with the latest run is used. One missing here ran at `at`. */
 	times: Record<string, number>
+	/**
+	 * Test files that were left out (failed, or never reached) and when: an
+	 * entry that vouches for one from before then is not used for it, so it
+	 * runs again. Another shard's entry keeps what it has seen of these.
+	 */
+	left: Record<string, number>
 }
 
 const LOCKFILES = new Set([
@@ -512,7 +518,7 @@ async function readSnapshot(file: string): Promise<Snapshot | null> {
 		return null
 	}
 	if (typeof parsed !== 'object' || parsed === null) return null
-	const { version, runtime, head, at, root, shard, job, projects, tree, tests, times } =
+	const { version, runtime, head, at, root, shard, job, projects, tree, tests, times, left } =
 		parsed as Record<string, unknown>
 	if (
 		version !== SNAPSHOT_VERSION ||
@@ -529,7 +535,10 @@ async function readSnapshot(file: string): Promise<Snapshot | null> {
 		!tests.every((file) => typeof file === 'string') ||
 		typeof times !== 'object' ||
 		times === null ||
-		!Object.values(times).every((time) => typeof time === 'number')
+		!Object.values(times).every((time) => typeof time === 'number') ||
+		typeof left !== 'object' ||
+		left === null ||
+		!Object.values(left).every((time) => typeof time === 'number')
 	) {
 		return null
 	}
@@ -545,6 +554,7 @@ async function readSnapshot(file: string): Promise<Snapshot | null> {
 		tree,
 		tests: tests as string[],
 		times: times as Record<string, number>,
+		left: left as Record<string, number>,
 	}
 }
 
@@ -595,6 +605,8 @@ export class TreeSnapshotProvider {
 	 * vouching for them, or the shard that owns them now would find no record.
 	 */
 	carried = new Map<string, number>()
+	/** Test files of other shards that were left out, and when: the run's own entry passes that on. */
+	left = new Map<string, number>()
 	/** The plugin's `dependencies` option, compiled. */
 	dependencies: DependencyRule[] = []
 	/** Whether to look inside a changed file instead of rerunning every test file that loaded it. */
@@ -629,8 +641,11 @@ export class TreeSnapshotProvider {
 		this.deselected = new Set()
 		const cacheDir = this.vitest.vite.config.cacheDir
 		this.carried = new Map()
-		const entries = restoredEntries(this.vitest)
-		if (entries) return this.fromEntries(options, entries)
+		const restored = restoredOf.get(this.vitest)
+		this.left = new Map(restored?.left)
+		if (restored && restored.entries.length > 0) {
+			return this.fromEntries(options, restored.entries)
+		}
 		// Vitest 5.1 hands over its record and selects from the changed files
 		// itself; on an older one both are the plugin's.
 		const own = dependencyStore(this.vitest) !== null
@@ -1236,7 +1251,7 @@ export class SnapshotRecorder implements Reporter {
 	private started = new Set<string>()
 	private partial = false
 	/** Tests a run vouches for once its coverage thresholds have passed. */
-	private pending: string[] | null = null
+	private pending: { vouched: string[]; left: string[] } | null = null
 	/** Worker records being read into the plugin's own store. */
 	private ended: TestModule[] = []
 
@@ -1316,7 +1331,11 @@ export class SnapshotRecorder implements Reporter {
 	}
 
 	/** The provider vitest is using: the root config's, which may come from another copy of this module. */
-	private activeProvider(): { deselected: Set<string>; carried: Map<string, number> } {
+	private activeProvider(): {
+		deselected: Set<string>
+		carried: Map<string, number>
+		left: Map<string, number>
+	} {
 		return configuredProvider(this.vitest) ?? this.provider
 	}
 
@@ -1401,10 +1420,10 @@ export class SnapshotRecorder implements Reporter {
 		// through the exit code alone; the snapshot waits for that verdict. A run
 		// already failing hides it, and writes now so its failed tests rerun.
 		if (this.checksThresholds(modules) && !failing()) {
-			this.pending = covered.vouched
+			this.pending = covered
 			return
 		}
-		await this.write(covered.vouched)
+		await this.write(covered.vouched, covered.left)
 	}
 
 	/** Whether vitest is about to report coverage and check `coverage.thresholds`. */
@@ -1419,22 +1438,25 @@ export class SnapshotRecorder implements Reporter {
 
 	/** Called by vitest once coverage is reported and its thresholds checked. */
 	async onFinishedReportCoverage(): Promise<void> {
-		const vouched = this.pending
+		const covered = this.pending
 		this.pending = null
-		if (vouched === null) return
+		if (covered === null) return
 		if (failing()) {
 			// An empty snapshot, not none: a fresh checkout would otherwise
 			// restore an older one that vouches for these tests.
 			this.vitest.logger.log(
 				'[blacksmith] coverage thresholds failed, the dependency snapshot vouches for no test and the next run runs them all',
 			)
-			await this.write([])
+			await this.write([], [...covered.vouched, ...covered.left])
 			return
 		}
-		await this.write(vouched)
+		await this.write(covered.vouched, covered.left)
 	}
 
-	private async write(vouched: readonly string[]): Promise<void> {
+	private async write(
+		vouched: readonly string[],
+		left: readonly string[],
+	): Promise<void> {
 		const cacheDir = this.vitest.vite.config.cacheDir
 		const { root, shard } = this.vitest.config
 		const repo = await repoRoot(root)
@@ -1456,6 +1478,7 @@ export class SnapshotRecorder implements Reporter {
 			),
 			tests: [],
 			times: {},
+			left: {},
 		}
 		// Other shards' test files first: this run's own result replaces theirs.
 		const now = snapshot.at
@@ -1466,6 +1489,15 @@ export class SnapshotRecorder implements Reporter {
 			// One deleted since, or moved out of the repository's test files.
 			if (!existsSync(test)) continue
 			snapshot.times[repoRelative(repo, test)] = time
+		}
+		for (const [test, time] of [
+			...this.activeProvider().left,
+			...left.map((test) => [test, now] as const),
+		]) {
+			const relative = repoRelative(repo, test)
+			if (existsSync(test) && !Object.hasOwn(snapshot.times, relative)) {
+				snapshot.left[relative] = time
+			}
 		}
 		snapshot.tests = Object.keys(snapshot.times).sort()
 		for (const [test, time] of Object.entries(snapshot.times)) {
@@ -1658,6 +1690,16 @@ export async function restoreDependencyCache(
 			if (known === undefined || time > known.time) latest.set(test, { time, from })
 		}
 	})
+	// A test file left out since then: no entry is used for it.
+	for (const { snapshot } of found) {
+		for (const [test, time] of Object.entries(snapshot.left)) {
+			const known = latest.get(test)
+			if (known === undefined || time >= known.time) {
+				latest.set(test, { time, from: -1 })
+			}
+		}
+	}
+	const left = new Map<string, number>()
 	const entries: CacheEntry[] = found.map(({ dir, key }) => ({
 		dir,
 		key,
@@ -1667,7 +1709,10 @@ export async function restoreDependencyCache(
 	for (const [test, { time, from }] of latest) {
 		const file = path.join(repo, test)
 		const entry = entries[from]
-		if (entry === undefined) continue
+		if (entry === undefined) {
+			if (!owns(file)) left.set(file, time)
+			continue
+		}
 		if (owns(file)) (entry.tests as Set<string>).add(file)
 		else (entry.others as Map<string, number>).set(file, time)
 	}
@@ -1680,12 +1725,14 @@ export async function restoreDependencyCache(
 		mine !== undefined &&
 		mine.index === own &&
 		sameShard(mine.saved, vitest.config.shard) &&
-		used.every((entry) => entry.dir === mine.dir && entry.others.size === 0)
+		used.every((entry) => entry.dir === mine.dir && entry.others.size === 0) &&
+		left.size === 0
 	) {
 		await cp(mine.dir, cacheDir, { recursive: true })
 		vitest.logger.log(`[blacksmith] restored dependency cache ${mine.key}`)
 		return
 	}
+	restoredOf.set(vitest, { entries: used, left })
 	if (used.length === 0) {
 		vitest.logger.log(
 			`[blacksmith] no dependency cache: no entry holds a test file of the ${describeShard(vitest.config.shard)}`,
@@ -1710,7 +1757,6 @@ export async function restoreDependencyCache(
 			units: unitsFile(snapshotPath(vitest, cacheDir)),
 		},
 	)
-	entriesOf.set(vitest, used)
 	for (const entry of used) {
 		if (entry.tests.size === 0) continue
 		vitest.logger.log(
@@ -1734,15 +1780,14 @@ interface CacheEntry {
 
 // On the process: a project with its own root evaluates the config, and so
 // the plugin, a second time.
-const ENTRIES = Symbol.for('blacksmith.vitest.cacheEntries')
-const entriesOf = ((globalThis as unknown as {
-	[ENTRIES]?: WeakMap<Vitest, CacheEntry[]>
-})[ENTRIES] ??= new WeakMap())
-
-/** The cache entries the run selects from, when it restored more than its own. */
-function restoredEntries(vitest: Vitest): CacheEntry[] | null {
-	return entriesOf.get(vitest) ?? null
-}
+const RESTORED = Symbol.for('blacksmith.vitest.restoredEntries')
+/** What a run restored: the entries it selects from, and the other shards' test files that were left out. */
+const restoredOf = ((globalThis as unknown as {
+	[RESTORED]?: WeakMap<
+		Vitest,
+		{ entries: CacheEntry[]; left: ReadonlyMap<string, number> }
+	>
+})[RESTORED] ??= new WeakMap())
 
 async function pooled<T, R>(
 	items: readonly T[],
