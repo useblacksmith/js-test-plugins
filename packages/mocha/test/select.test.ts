@@ -403,6 +403,14 @@ describe('Actions cache', () => {
 		)
 	})
 
+	test('a run after `affected` in the same job restores again and reruns nothing', async () => {
+		repo.git('clean', '-qfdx', '-e', 'node_modules/mocha')
+		assert.match(await cli('affected', '--', GLOB), /0 of 6 spec file\(s\) affected/)
+		const output = await cli('run', '--', GLOB)
+		assert.match(output, /restored dependency cache/)
+		assert.match(output, /0 of 6 spec file\(s\) affected/)
+	})
+
 	test('a job whose cache is read-only restores and does not save', async () => {
 		repo.git('clean', '-qfdx', '-e', 'node_modules/mocha')
 		repo.env.ACTIONS_CACHE_MODE = 'read'
