@@ -284,6 +284,17 @@ export function dropStale(
 	const out =
 		stored?.version === RECORDS_VERSION ? structuredClone(stored) : emptyRecords()
 	const verdict = select(out, Object.keys(out.files), changed, policy)
+	// The run that loads a changed file records what it imports again; when
+	// no test file that loads it runs (the change reaches none of them), the
+	// edges it has are the only ones there will be.
+	const reloaded = new Set<string>()
+	for (const [spec, decision] of Object.entries(verdict)) {
+		const entry = out.files[spec]
+		if (!decision.run || !entry) continue
+		const roots = [specPath(spec), ...entry.deps]
+		for (const test of Object.values(entry.tests)) roots.push(...(test.deps ?? []))
+		for (const file of closure(out.graph, roots)) reloaded.add(file)
+	}
 	for (const [spec, decision] of Object.entries(verdict)) {
 		if (!decision.run) continue
 		if (decision.stale) delete out.files[spec]
@@ -291,8 +302,7 @@ export function dropStale(
 			if (test.stale) delete out.files[spec]?.tests[test.title]
 		}
 	}
-	// The run that loads a changed file records what it imports again.
-	for (const file of changed) delete out.graph[file]
+	for (const file of changed) if (reloaded.has(file)) delete out.graph[file]
 	return out
 }
 
@@ -320,6 +330,10 @@ export function mergeRecords(
 	policy: Policy = {},
 ): Records {
 	const out = dropStale(stored, changed, policy)
+	// A run that loaded a changed file names what it imports now.
+	for (const file of changed) {
+		if (runs.some((run) => run.graph && file in run.graph)) delete out.graph[file]
+	}
 	for (const run of runs) {
 		for (const [from, to] of Object.entries(run.graph ?? {})) {
 			out.graph[from] = union(out.graph[from], to)
