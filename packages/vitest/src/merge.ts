@@ -112,13 +112,14 @@ function addPackages(
 		const loaded = from.files[test]
 		if (claimed.has(test)) {
 			// What it loaded in the projects of both entries.
+			// One without a list (a browser project ran it there) leaves the
+			// other's in place, and the list short of what it loaded.
 			const known = into.files[test]
-			if (known === undefined || loaded === undefined) {
-				delete into.files[test]
+			if (known !== undefined || loaded !== undefined) {
+				into.files[test] = [...new Set([...(known ?? []), ...(loaded ?? [])])]
+			}
+			if (known === undefined || loaded === undefined || theirs.has(test)) {
 				incomplete.add(test)
-			} else {
-				into.files[test] = [...new Set([...known, ...loaded])]
-				if (theirs.has(test)) incomplete.add(test)
 			}
 			continue
 		}

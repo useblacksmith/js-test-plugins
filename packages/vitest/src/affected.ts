@@ -174,13 +174,18 @@ function idFile(id: string): string {
 	return id.slice(id.indexOf('\0') + 1)
 }
 
+/** A repo-relative test file as Vitest names it in a specification: absolute, with `/` on every platform. */
+function testFile(repo: string, test: string): string {
+	return path.join(repo, test).split(path.sep).join('/')
+}
+
 /** The snapshot's vouched test files as ids of absolute paths, each with its time. */
 function vouchedIds(snapshot: Snapshot, repo: string): Map<string, number> {
 	const ids = new Map<string, number>()
 	for (const [project, tests] of Object.entries(snapshot.tests)) {
 		for (const test of tests) {
 			ids.set(
-				specId(project, path.join(repo, test)),
+				specId(project, testFile(repo, test)),
 				snapshot.times[project]?.[test] ?? snapshot.at,
 			)
 		}
@@ -193,7 +198,7 @@ function leftIds(snapshot: Snapshot, repo: string): Map<string, number> {
 	const ids = new Map<string, number>()
 	for (const [project, tests] of Object.entries(snapshot.left)) {
 		for (const [test, time] of Object.entries(tests)) {
-			ids.set(specId(project, path.join(repo, test)), time)
+			ids.set(specId(project, testFile(repo, test)), time)
 		}
 	}
 	return ids
