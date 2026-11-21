@@ -189,6 +189,17 @@ export function value(node: Node | null | undefined, scope: Scope, mod: Module):
 }
 
 /** Whether `name` is the language's where it is read. */
+/** What holds the methods of each kind. */
+const MAKERS: Record<NonNullable<Kind>, string> = {
+	string: 'String',
+	number: 'Number',
+	boolean: 'Boolean',
+	array: 'Array',
+	object: 'Object',
+	set: 'Set',
+	map: 'Map',
+}
+
 function native(name: string, scope: Scope, run: Run): boolean {
 	return !scope.holder(name) && !run.mod.own(name) && !run.mod.taken(name)
 }
@@ -361,6 +372,8 @@ function called(node: Node, scope: Scope, run: Run): Val | undefined {
 	}
 	const methods = self?.kind ? METHODS[self.kind] : undefined
 	if (!self || !methods || !Object.hasOwn(methods, name)) return undefined
+	// A method the module may have replaced is not the language's.
+	if (!native(MAKERS[self.kind!], scope, run)) return undefined
 	const spec = methods[name]!
 	if (args.length < spec.min || args.length > spec.args.length) return undefined
 	let result: Val | undefined
@@ -483,9 +496,11 @@ function fresh(name: string, scope: Scope, frame: Frame): boolean {
 }
 
 /** Declares the names of `pattern` for `val`, which it must be able to take apart without throwing. */
-function declare(pattern: Node, val: Val, scope: Scope, frame: Frame): boolean {
+function declare(pattern: Node, val: Val, scope: Scope, frame: Frame, fixed = false): boolean {
 	switch (pattern.type) {
 		case 'Identifier':
+			// Assigning to a `const` throws.
+			if (fixed && frame.loose.has(pattern.name)) return false
 			// A name that hides another reads as the other before it is declared, where reading it throws.
 			if (!fresh(pattern.name, scope, frame)) return false
 			scope.set(pattern.name, frame.loose.has(pattern.name) ? ANY : val)
@@ -493,17 +508,17 @@ function declare(pattern: Node, val: Val, scope: Scope, frame: Frame): boolean {
 		case 'AssignmentPattern': {
 			// Only a literal: anything else may read a name that is not declared yet.
 			const initial = unwrap(pattern.right)?.type === 'Literal' ? evaluate(pattern.right, scope, frame.run) : undefined
-			return initial !== undefined && declare(pattern.left, join(val, initial), scope, frame)
+			return initial !== undefined && declare(pattern.left, join(val, initial), scope, frame, fixed)
 		}
 		case 'ArrayPattern':
 			if (val.kind !== 'array' && val.kind !== 'string') return false
 			return (pattern.elements as Array<Node | null>).every(
-				(item) => item === null || (item.type !== 'RestElement' && declare(item, ANY, scope, frame)),
+				(item) => item === null || (item.type !== 'RestElement' && declare(item, ANY, scope, frame, fixed)),
 			)
 		case 'ObjectPattern':
 			if (val.kind === null) return false
 			return (pattern.properties as Node[]).every(
-				(property) => property.type === 'Property' && !property.computed && declare(property.value, ANY, scope, frame),
+				(property) => property.type === 'Property' && !property.computed && declare(property.value, ANY, scope, frame, fixed),
 			)
 		default:
 			return false
@@ -544,7 +559,7 @@ function execute(node: Node, scope: Scope, frame: Frame): boolean {
 				) {
 					val = { kind: 'array', own: true }
 				}
-				return val !== undefined && declare(declarator.id, val, scope, frame)
+				return val !== undefined && declare(declarator.id, val, scope, frame, node.kind === 'const')
 			})
 		case 'ExpressionStatement': {
 			const expression = unwrap(node.expression)
@@ -574,7 +589,7 @@ function execute(node: Node, scope: Scope, frame: Frame): boolean {
 			const left = node.left as Node
 			if (left.type !== 'VariableDeclaration' || left.kind === 'var' || left.declarations.length !== 1) return false
 			const inner = new Scope(scope)
-			return declare(left.declarations[0].id, element(from), inner, frame) && execute(node.body, new Scope(inner), frame)
+			return declare(left.declarations[0].id, element(from), inner, frame, left.kind === 'const') && execute(node.body, new Scope(inner), frame)
 		}
 		default:
 			return false

@@ -335,6 +335,7 @@ describe('narrow: module digests', () => {
 			'delete c.d',
 			"import('./c.ts')",
 			'class { static c = d() }',
+			'class { static c = [null.d, [1].map((e) => e)] }',
 			'class { static { c() } }',
 			'class { @c d() {} }',
 			'class { @c d = 1 }',
@@ -345,6 +346,9 @@ describe('narrow: module digests', () => {
 		]) {
 			expect(made(code), code).toBe(true)
 		}
+		// What is around a call must not throw either, whatever holds it.
+		expect(digest('export default [null.b, [1].map((c) => c)]').units['default']?.effects).toBe(true)
+		expect(digest('export default [1].map((c) => c)').units['default']?.effects).toBeUndefined()
 		// A call of the language's that reads a `const` of literals runs nothing of the module's.
 		const HELPERS = [
 			'let n = 0',
@@ -437,6 +441,11 @@ describe('narrow: module digests', () => {
 			['const M = c()', 'Object.values(P)'],
 			['P.b = 1', 'Object.values(P)'],
 			['class C { static d = c() }', 'Object.values(P)'],
+			// A method the module replaces, a function it writes over, and an assignment that throws.
+			['Array.prototype.map = c', "['b'].map((b) => b)"],
+			['Object.assign(Array.prototype, c)', "['b'].map((b) => b)"],
+			['for (kept of [counted]) {}', 'kept(P.b)'],
+			['function fixed(b: string) { const d = b; d = b; return d }', 'fixed(P.b)'],
 			['@c class C {}', 'Object.values(P)'],
 			['export default c()', 'Object.values(P)'],
 			['export const d = c()', 'Object.values(P)'],

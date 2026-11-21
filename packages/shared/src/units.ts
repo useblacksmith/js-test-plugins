@@ -186,6 +186,8 @@ function taken(node: Node | null | undefined, name: string, held = false): boole
 		return false
 	}
 	if (node.type === 'MemberExpression') {
+		// What holds its methods may be handed on to be changed.
+		if (!node.computed && node.property.name === 'prototype' && rooted(node, name)) return true
 		return taken(node.object, name, !node.computed) || (node.computed && taken(node.property, name))
 	}
 	if (node.type === 'CallExpression' || node.type === 'NewExpression') {
@@ -241,7 +243,14 @@ function reassigned(node: Node | null | undefined, names: Set<string>): Set<stri
 		return names
 	}
 	if (typeof node.type !== 'string') return names
-	const target = node.type === 'AssignmentExpression' ? node.left : node.type === 'UpdateExpression' ? node.argument : null
+	const target =
+		node.type === 'AssignmentExpression'
+			? node.left
+			: node.type === 'UpdateExpression'
+				? node.argument
+				: (node.type === 'ForOfStatement' || node.type === 'ForInStatement') && node.left.type !== 'VariableDeclaration'
+					? node.left
+					: null
 	if (target) for (const name of bound(target, [])) names.add(name)
 	for (const key in node) {
 		if (key === 'type' || key === 'start' || key === 'end') continue
@@ -256,6 +265,11 @@ function reassigned(node: Node | null | undefined, names: Set<string>): Set<stri
  * an instance runs later is left out. A call counts, unless `value` tells that
  * it runs only the language's own code and functions of the module that do the same.
  */
+/** Whether `node` makes a call and is not told to run through: what is around the call must not throw either. */
+function whole(node: Node | null | undefined, scope: Module): boolean {
+	return !!node && runs(node) && !value(node, scope.root, scope)
+}
+
 function effects(node: Node | null | undefined, scope: Module): boolean {
 	if (!node || typeof node !== 'object') return false
 	if (Array.isArray(node)) return node.some((child) => effects(child, scope))
@@ -273,6 +287,7 @@ function effects(node: Node | null | undefined, scope: Module): boolean {
 			(node.computed ? effects(node.key, scope) : false)
 		)
 	}
+	if (node.type === 'PropertyDefinition' && node.static && whole(node.value, scope)) return true
 	if (node.type === 'PropertyDefinition' && !node.static) {
 		return effects(node.decorators, scope) || (node.computed ? effects(node.key, scope) : false)
 	}
@@ -310,8 +325,15 @@ function loud(program: Node, own: (name: string) => boolean): Set<Node> {
 		if (node.type === 'FunctionDeclaration' && node.id && node.body && !written.has(node.id.name)) scope.fns.set(node.id.name, node)
 	}
 	const visit = (node: Node, constant: boolean): void => {
-		// A value that makes a call is taken as a whole: what is around the call must not throw either.
-		if (effects(node, scope) || (node.init && runs(node.init) && !value(node.init, scope.root, scope))) {
+		const all =
+			node.type === 'VariableDeclarator'
+				? node.init
+				: node.type === 'ExpressionStatement'
+					? node.expression
+					: node.type.endsWith('Declaration') || node.type.endsWith('Statement')
+						? null
+						: node
+		if (effects(node, scope) || whole(all, scope)) {
 			found.add(node)
 			scope.root.clear()
 			return
