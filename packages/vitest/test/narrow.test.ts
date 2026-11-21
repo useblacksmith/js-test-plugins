@@ -427,6 +427,11 @@ describe('narrow: module digests', () => {
 			expect(digest(code).units['a']?.effects, code).toBe(true)
 		}
 		expect(digest('export function a() { b() }').units['a']?.effects).toBeUndefined()
+		for (const code of ['export default c()', 'export default class { static c = d() }', 'export class a { static c = d() }']) {
+			const units = Object.values(digest(code).units)
+			expect(units.some((unit) => unit.effects), code).toBe(true)
+		}
+		expect(Object.values(digest('export default [1]').units).some((unit) => unit.effects)).toBe(false)
 		expect(digest('export enum A { B = 1 }').units['A']?.effects).toBeUndefined()
 	})
 

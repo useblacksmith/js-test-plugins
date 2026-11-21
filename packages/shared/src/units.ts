@@ -280,12 +280,15 @@ function loud(program: Node, own: (name: string) => boolean): Set<Node> {
 			scope.plain.add(node.id.name)
 		}
 	}
-	for (let node of program.body as Node[]) {
-		if (node.type === 'ExportNamedDeclaration' || node.type === 'ExportDefaultDeclaration') node = node.declaration ?? node
+	for (const statement of program.body as Node[]) {
+		const exported = statement.type === 'ExportNamedDeclaration' || statement.type === 'ExportDefaultDeclaration'
+		const node: Node = (exported && statement.declaration) || statement
 		if (node.type === 'VariableDeclaration') {
 			for (const declarator of node.declarations as Node[]) visit(declarator, node.kind === 'const')
 		} else {
 			visit(node, false)
+			// A unit may be the statement that exports the value.
+			if (found.has(node)) found.add(statement)
 		}
 	}
 	return found
