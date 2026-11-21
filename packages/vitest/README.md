@@ -70,6 +70,7 @@ A change to a file does not rerun every test file that loaded it. The plugin rec
 | --- | --- |
 | The body of a top-level function (`function f() {}`, `const f = () => {}`) | Those that called the function |
 | Another top-level declaration (a constant, a class, an enum), or a function's parameter list | Those that loaded a module importing it by name, through re-exports too. A namespace import, a dynamic `import()` or a mock of the module counts as importing every name |
+| One key of an object literal held in a `const` (`const FLAGS = { A: 'a', B: 'b' }`): changed, added or removed | Those that called a function reading that key as `FLAGS.A`, or using the object in any other way (`FLAGS[name]`, `Object.values(FLAGS)`, passing it on), in the file or in a module importing it by name. Those that loaded a module doing so outside a function, too. Any other object counts as one declaration: one with a spread, a computed key, an accessor, a method or a `function` value |
 | Types, comments, or a new declaration nothing uses yet | None. A type annotation inside a class that has a decorator is not a type here: emitted decorator metadata makes it a value, so it counts as a change to the class |
 | A new import | Those that had not loaded the imported module |
 | Any other top-level statement, an `export *`, or declarations that changed places | All that loaded the file |

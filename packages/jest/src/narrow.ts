@@ -20,12 +20,15 @@ import { dataDir, suffix, type Resolve, type Shard, type State } from './state.t
  * its functions each test file entered.
  */
 const UNITS_VERSION = 2
+/** What a digest holds. A record written with less in each is still read, and its digests are taken again. */
+const DIGESTS = 2
 const CODE = /\.[cm]?[jt]sx?$/
 
 interface Units {
 	version: typeof UNITS_VERSION
 	/** `at` of the dependency record this was written with: any other record is not the one these tests ran under. */
 	at: number
+	digests?: number
 	/** Repository-relative module → its digest, and the hash of the content it was taken from. */
 	modules: Record<string, ResolvedDigest>
 	hashes: Record<string, string>
@@ -114,7 +117,8 @@ function digestOf(
 	resolve: Resolve,
 ): ResolvedDigest | null {
 	const absolute = path.join(repo, file)
-	const analysis = analyze(code, absolute)
+	// A CommonJS module too: what it loads says which changes can reach a test through it.
+	const analysis = analyze(code, absolute, undefined, true)
 	if (!analysis) return null
 	const specifiers: Record<string, string> = {}
 	for (const specifier of new Set(analysis.digest.sources)) {
@@ -186,6 +190,10 @@ export function updateUnits(
 		modules: {},
 		hashes: {},
 		tests: {},
+	}
+	if (units.digests !== DIGESTS) {
+		units.hashes = {}
+		units.digests = DIGESTS
 	}
 	for (const [spec, entered] of ran) {
 		const previous = units.tests[spec]
