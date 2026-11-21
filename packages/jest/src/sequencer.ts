@@ -40,7 +40,6 @@ import { dataDir, log, resolveFromJest, state, type Pending } from './state.ts'
 interface Test {
 	path: string
 	context?: {
-		config?: { id?: string }
 		resolver?: { resolveModule?: (from: string, specifier: string) => string }
 	}
 }
@@ -66,10 +65,6 @@ const loaded = require(
 	resolveFromJest(process.cwd(), '@jest/test-sequencer'),
 ) as { default?: SequencerClass } & SequencerClass
 const Base: SequencerClass = loaded.default ?? loaded
-
-function projectId(test: Test): string {
-	return test.context?.config?.id ?? ''
-}
 
 export default class BlacksmithSequencer extends Base {
 	private readonly blacksmithConfig: GlobalConfig | undefined
@@ -97,25 +92,7 @@ export default class BlacksmithSequencer extends Base {
 		}
 		ctx.shard = { index: options.shardIndex, count: options.shardCount }
 		this.everyTest = tests
-		// Jest shards a test file once per project, so it can put the file on two
-		// shards. The records are per test file, so the file goes whole to the
-		// shard given its copy in the first project by id.
-		const first = new Map<string, Test>()
-		for (const test of tests) {
-			const known = first.get(test.path)
-			if (!known || projectId(test) < projectId(known)) {
-				first.set(test.path, test)
-			}
-		}
-		const whole = (theirs: Test[]): Test[] => {
-			const owned = new Set(theirs)
-			return tests.filter((test) => {
-				const copy = first.get(test.path)
-				return copy !== undefined && owned.has(copy)
-			})
-		}
-		const theirs = super.shard(tests, options)
-		return Array.isArray(theirs) ? whole(theirs) : theirs.then(whole)
+		return super.shard(tests, options)
 	}
 
 	override async sort(tests: Test[]): Promise<Test[]> {

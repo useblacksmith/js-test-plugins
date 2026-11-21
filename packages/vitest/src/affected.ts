@@ -1217,7 +1217,7 @@ export class ShadowAnalysis {
 		const owns = await shardOwner(vitest)
 		const specifications = (await vitest.globTestSpecifications()).filter(
 			(specification) =>
-				owns(specification.moduleId),
+				owns(specification.moduleId, specification.project.name),
 		)
 		const owned = [
 			...new Set(specifications.map((specification) => specification.moduleId)),
