@@ -176,6 +176,15 @@ interface Scope {
 	own(name: string): boolean
 	/** Each `const` of literals, while nothing but the language's own code has run since it was made. */
 	plain: Set<string>
+	/** Those of `plain` that are an object or an array, which a read does not throw on. */
+	objects: Set<string>
+}
+
+/** Whether `node` is written as an object or an array, or names a `const` that is. */
+function object(node: Node | null | undefined, scope: Scope): boolean {
+	node = unwrap(node)
+	if (node?.type === 'Identifier') return scope.objects.has(node.name)
+	return node?.type === 'ObjectExpression' || node?.type === 'ArrayExpression'
 }
 
 /** The calls that read a value of literals and run nothing of the module's: it has no getter to reach. */
@@ -226,7 +235,9 @@ function reads(node: Node, scope: Scope): boolean {
 	if (callee?.type !== 'MemberExpression' || callee.computed || callee.optional) return false
 	const object = unwrap(callee.object)
 	if (object?.type !== 'Identifier' || object.name !== 'Object' || scope.own('Object')) return false
-	return callee.property.type === 'Identifier' && READS.has(callee.property.name) && literal(node.arguments[0], scope)
+	if (callee.property.type !== 'Identifier' || !READS.has(callee.property.name)) return false
+	// Of `null`, or of a key the value does not have, the read throws.
+	return object(node.arguments[0], scope) && literal(node.arguments[0], scope)
 }
 
 /**
@@ -271,13 +282,15 @@ function effects(node: Node | null | undefined, scope: Scope): boolean {
  */
 function loud(program: Node, own: (name: string) => boolean): Set<Node> {
 	const found = new Set<Node>()
-	const scope: Scope = { own, plain: new Set() }
+	const scope: Scope = { own, plain: new Set(), objects: new Set() }
 	const visit = (node: Node, constant: boolean): void => {
 		if (effects(node, scope)) {
 			found.add(node)
 			scope.plain.clear()
+			scope.objects.clear()
 		} else if (constant && node.id?.type === 'Identifier' && node.init && literal(node.init, scope)) {
 			scope.plain.add(node.id.name)
+			if (object(node.init, scope)) scope.objects.add(node.id.name)
 		}
 	}
 	for (const statement of program.body as Node[]) {

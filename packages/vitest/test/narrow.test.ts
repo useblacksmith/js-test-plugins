@@ -353,7 +353,6 @@ describe('narrow: module digests', () => {
 			'Object.keys(P)',
 			'Object.values(P)',
 			'Object.entries(P)',
-			'Object.values(P.f)',
 			'Object.keys(L)',
 			"Object.values({ b: 'c' })",
 			'Object.keys(P as Record<string, () => void>)',
@@ -365,6 +364,11 @@ describe('narrow: module digests', () => {
 		}
 		for (const code of [
 			'Object.values(c)',
+			'Object.values(P.f)',
+			'Object.values(P.missing)',
+			'Object.keys(null)',
+			'Object.keys(undefined)',
+			"Object.keys('b')",
 			'Object.values(P, c)',
 			'Object.values(...L)',
 			'Object.values(P[c])',
