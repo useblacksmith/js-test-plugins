@@ -321,6 +321,18 @@ describe('narrow: module digests', () => {
 			'class { c = d(); e() { f() } }',
 			'<C d={() => e()} />',
 			'c as unknown as D<E>',
+			'Object.values(c)',
+			'Object.freeze({ c: 1 })',
+			'Object.values(c).filter((d) => d !== e.f)',
+			"Object.keys(c).map((d) => d + 1).join(', ')",
+			'[c, d].map((e) => `${e}`)',
+			"'c d'.split(' ')",
+			'new Set(Object.values(c))',
+			'new Map([[c, 1]])',
+			'Array.from(c, (d) => d * 2)',
+			'Math.max(c, d)',
+			'String(c)',
+			'JSON.stringify(c)',
 		]) {
 			expect(made(code), code).toBeUndefined()
 		}
@@ -342,8 +354,30 @@ describe('narrow: module digests', () => {
 			'class { constructor(@c e) {} }',
 			'class extends c() {}',
 			'<C d={e()} />',
+			'Object.values(c).filter(d)',
+			'Object.values(c).filter((d) => e(d))',
+			'Object.values(c).forEach((d) => d)',
+			'Object.assign(c, d)',
+			'Object.defineProperty(c, d, {})',
+			'c.map((d) => d)',
+			'c.values()',
+			'[c].sort()',
+			'[c].push(d)',
+			'new Set(c())',
+			'new C(Object.values(d))',
+			'Array.from(c, d)',
+			'JSON.parse(c)',
+			'[c].map(async (d) => d)',
 		]) {
 			expect(made(code), code).toBe(true)
+		}
+		// A name of the module's own is not the language's.
+		for (const code of [
+			"import { Object } from './c.ts'\nexport const a = Object.values(d)",
+			'const Set = c\nexport const a = new Set()',
+			'function String() {}\nexport const a = String(c)',
+		]) {
+			expect(digest(code).units['a']?.effects, code).toBe(true)
 		}
 		expect(digest('export function a() { b() }').units['a']?.effects).toBeUndefined()
 		expect(digest('export enum A { B = 1 }').units['A']?.effects).toBeUndefined()
@@ -414,21 +448,24 @@ describe('narrow: module digests', () => {
 				digest("export const FLAGS = {\nA: 'a',\nb: function () { return this.A }\n} as const"),
 				digest("export const FLAGS = {\nA: 'a',\ntoString: 1\n} as const"),
 				digest("export let FLAGS = {\nA: 'a',\nB: 'b'\n}"),
+				digest("export const FLAGS = Object.freeze({\nA: 'a',\nB: 'b'\n})"),
 			]) {
 				const change = difference(before, after)
 				expect(change).toMatchObject({ values: new Set(['FLAGS']) })
 				expect(change).toHaveProperty('keys', new Map())
 			}
-			expect(difference(before, digest("export const FLAGS = Object.freeze({\nA: 'a',\nB: 'b'\n})"))).toBe('all')
+			expect(difference(before, digest("export const FLAGS = make({\nA: 'a',\nB: 'b'\n})"))).toBe('all')
 		})
 
 		test('a key whose value may do more than make it is a change for every test that loaded the module', () => {
 			expect(difference(flags("A: 'a',\nB: make('b'),"), flags("A: 'a',\nB: make('b2'),"))).toBe('all')
-			// A value built from the object runs what it ran before.
-			const names = 'export const NAMES = Object.keys(FLAGS)'
+			// So is one for a value built from the object that may, and not for one that only makes a value.
+			const names = 'export const NAMES = Object.keys(FLAGS).filter((key) => key !== FLAGS.A)'
 			expect(difference(flags("A: 'a',", names), flags("A: 'a2',", names))).toMatchObject({
 				values: new Set(['FLAGS', 'NAMES']),
 			})
+			const told = 'export const TOLD = tell(FLAGS)'
+			expect(difference(flags("A: 'a',", told), flags("A: 'a2',", told))).toBe('all')
 		})
 
 		test('a value that can reach the other keys makes the object one value', () => {
