@@ -23,7 +23,7 @@ export function unitsFile(snapshotFile: string): string {
 }
 const UNITS_VERSION = 2
 
-interface UnitRecords {
+export interface UnitRecords {
 	version: typeof UNITS_VERSION
 	/** Repo-relative module → its digest when a test last ran it. */
 	modules: Record<string, ResolvedDigest>
@@ -220,7 +220,7 @@ export function loadUnits(stored: StoredUnits | LegacyUnits | null): UnitRecords
 	return { ...rest, tests }
 }
 
-async function readUnits(file: string): Promise<UnitRecords | null> {
+export async function readUnits(file: string): Promise<UnitRecords | null> {
 	try {
 		return loadUnits(
 			JSON.parse(await readFile(file, 'utf8')) as StoredUnits | LegacyUnits,
@@ -294,10 +294,10 @@ export async function updateUnits(
 	for (const module of Object.keys(records.modules)) {
 		if (!existsSync(path.join(repo, module))) delete records.modules[module]
 	}
-	await writeUnitsFile(units, records)
+	await writeUnits(units, records)
 }
 
-async function writeUnitsFile(file: string, records: UnitRecords): Promise<void> {
+export async function writeUnits(file: string, records: UnitRecords): Promise<void> {
 	await mkdir(path.dirname(file), { recursive: true })
 	const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
 	await writeFile(tmp, JSON.stringify(storeUnits(records)))
@@ -371,5 +371,5 @@ export async function advanceDigests(repo: string, file: string): Promise<void> 
 	if (!records) return
 	for (const [module, digest] of digests) records.modules[module] = digest
 	await refreshDigests(repo, records)
-	await writeUnitsFile(file, records)
+	await writeUnits(file, records)
 }

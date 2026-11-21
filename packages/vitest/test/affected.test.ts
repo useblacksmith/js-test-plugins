@@ -219,7 +219,7 @@ describe('--changed against the tree snapshot', () => {
 			`[blacksmith] filtered out 0 of ${TESTS.length} test files as unaffected, ran ${TESTS.length}`,
 		)
 		expect(repo.snapshot()).toMatchObject({
-			version: 9,
+			version: 10,
 			head: repo.git('rev-parse', 'HEAD').trim(),
 			root: '',
 			shard: null,
@@ -1413,7 +1413,7 @@ describe('the dependency record travels through the Actions cache', () => {
 		const first = await producer.run()
 		expect(first.exitCode, first.output).toBe(0)
 		expect(first.output).toContain(
-			`saved dependency cache blacksmith-vitest-v9-${runtimeId()}-all-1of1-`,
+			`saved dependency cache blacksmith-vitest-v10-${runtimeId()}-all-shard0-`,
 		)
 		expect([...cache.entries.values()].filter((e) => e.final)).toHaveLength(1)
 
@@ -1422,7 +1422,7 @@ describe('the dependency record travels through the Actions cache', () => {
 		const restored = await consumer.run('--changed')
 		expect(restored.exitCode, restored.output).toBe(0)
 		expect(restored.output).toContain(
-			`restored dependency cache blacksmith-vitest-v9-${runtimeId()}-all-1of1-`,
+			`restored dependency cache blacksmith-vitest-v10-${runtimeId()}-all-shard0-`,
 		)
 		expect(restored.ran).toEqual([])
 
@@ -1503,7 +1503,7 @@ describe('the dependency record travels through the Actions cache', () => {
 		expect(clean.ran).toEqual([...TESTS].sort())
 		expect(clean.output).toMatch(
 			new RegExp(
-				`shadow: would have run 0 of \\d+ test files \\(0 files changed since [0-9a-f]{12}, from blacksmith-vitest-v9-${runtimeId()}-all-1of1-`,
+				`shadow: would have run 0 of \\d+ test files \\(0 files changed since [0-9a-f]{12}, from blacksmith-vitest-v10-${runtimeId()}-all-shard0-`,
 			),
 		)
 		expect(clean.output).not.toContain('restored dependency cache')
@@ -1566,6 +1566,87 @@ describe('the dependency record travels through the Actions cache', () => {
 		expect(run.exitCode, run.output).toBe(0)
 		expect(run.output).toContain('restored dependency cache')
 		expect(run.ran).toEqual([])
+	})
+
+	test('a run on another shard count takes each test file from the shard that ran it last, and reruns only what changed', async () => {
+		const producer = new Repo('shard-count-producer')
+		producer.env = { ACTIONS_RESULTS_URL: cache.url }
+		for (const shard of ['1/2', '2/2']) {
+			const run = await producer.run(`--shard=${shard}`)
+			expect(run.exitCode, run.output).toBe(0)
+			expect(run.output).toContain('saved dependency cache')
+		}
+		// Nothing changed: no shard of three reruns a test file, though most
+		// of them were on another shard of two.
+		for (const shard of ['1/3', '2/3', '3/3']) {
+			const repo = new Repo(`shard-count-same-${shard[0]}`)
+			repo.env = { ACTIONS_RESULTS_URL: cache.url }
+			const run = await repo.run('--changed', `--shard=${shard}`)
+			expect(run.exitCode, run.output).toBe(0)
+			expect(run.ran, run.output).toEqual([])
+		}
+		// And an unsharded run finds them all.
+		const whole = new Repo('shard-count-whole')
+		whole.env = { ACTIONS_RESULTS_URL: cache.url }
+		expect((await whole.run('--changed')).ran).toEqual([])
+		// A change reruns its test file on exactly one shard, and nothing else.
+		const ran: string[] = []
+		for (const shard of ['1/3', '2/3', '3/3']) {
+			const repo = new Repo(`shard-count-changed-${shard[0]}`)
+			repo.env = { ACTIONS_RESULTS_URL: cache.url }
+			repo.write('src/lib/a.ts', "export const a = 'a'\nvoid 0\n")
+			const run = await repo.run('--changed', `--shard=${shard}`)
+			expect(run.exitCode, run.output).toBe(0)
+			ran.push(...run.ran)
+		}
+		expect(ran.sort()).toEqual(['one', 'two'])
+	})
+
+	test('a test file that failed runs again, though another shard still vouches for an older run of it', async () => {
+		const env = { ACTIONS_RESULTS_URL: cache.url }
+		const flaky = (repo: Repo, note: string) =>
+			repo.write(
+				'src/flaky.test.ts',
+				`${readFileSync(path.join(repo.cwd, 'src/flaky.test.ts'), 'utf8')}// ${note}\n`,
+			)
+		const producer = new Repo('left-producer')
+		producer.env = env
+		for (const shard of ['1/2', '2/2']) {
+			expect((await producer.run(`--shard=${shard}`)).exitCode).toBe(0)
+		}
+		// Its own shard runs it, and the other one then vouches for that run too.
+		let owner = ''
+		for (const [round, shard] of ['1/2', '2/2', '1/2'].entries()) {
+			const repo = new Repo(`left-passed-${round}`)
+			repo.env = env
+			flaky(repo, 'passes')
+			const run = await repo.run('--changed', `--shard=${shard}`)
+			expect(run.exitCode, run.output).toBe(0)
+			if (run.ran.includes('flaky')) owner = shard
+		}
+		expect(owner).not.toBe('')
+		const failing = new Repo('left-failing')
+		failing.env = { ...env, BLACKSMITH_FLAKY: '1' }
+		flaky(failing, 'fails')
+		// Its own commit, so its entry is not named as one saved in the same second.
+		failing.commit('fails')
+		const failed = await failing.run('--changed', `--shard=${owner}`)
+		expect(failed.ran).toEqual(['flaky'])
+		expect(failed.exitCode).toBe(1)
+		// Back to the content the other shard saw pass: it still runs.
+		const again = new Repo('left-again')
+		again.env = env
+		flaky(again, 'passes')
+		const run = await again.run('--changed', `--shard=${owner}`)
+		expect(run.ran, run.output).toEqual(['flaky'])
+		expect(run.exitCode, run.output).toBe(0)
+	})
+
+	test('more shards than maxShards fails the run', async () => {
+		const repo = new Repo('too-many-shards')
+		const run = await repo.run('--shard=1/21')
+		expect(run.exitCode).not.toBe(0)
+		expect(run.output).toContain('maxShards (20)')
 	})
 
 	test('under a custom sequencer a changed test runs on exactly one shard', async () => {

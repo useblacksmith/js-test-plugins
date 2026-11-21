@@ -16,6 +16,7 @@ import {
 	configuredProvider,
 	isTreeSnapshotProvider,
 	isSnapshotRecorder,
+	DEFAULT_MAX_SHARDS,
 	restoreDependencyCache,
 	ShadowAnalysis,
 	SnapshotRecorder,
@@ -54,6 +55,13 @@ export interface BlacksmithOptions {
 	 * `{ 'tests/*.spec.ts': 'fixtures/**' }`, say.
 	 */
 	dependencies?: Record<string, string | string[]>
+	/**
+	 * The largest shard count (`--shard=i/N`) the plugin accepts, 20 by
+	 * default; a run split further fails. Before selecting, a shard looks in
+	 * the Actions cache for the record of every shard up to this number, so a
+	 * test file another shard ran last is not rerun after the count changed.
+	 */
+	maxShards?: number
 }
 
 /**
@@ -187,6 +195,12 @@ export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 					} catch {}
 				})
 			}
+			const maxShards = options.maxShards ?? DEFAULT_MAX_SHARDS
+			if (vitest.config.shard && vitest.config.shard.count > maxShards) {
+				throw new Error(
+					`[blacksmith] --shard=${vitest.config.shard.index}/${vitest.config.shard.count} splits the run into more than maxShards (${maxShards}) shards; raise the plugin's maxShards option to at least ${vitest.config.shard.count}`,
+				)
+			}
 			// Their sequencer's shards must not depend on which tests the
 			// selection kept, or the provider's view of the shard and vitest's
 			// would differ.
@@ -204,7 +218,7 @@ export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 				}
 				shadow ??= new ShadowAnalysis(vitest, active.dependencies)
 			} else {
-				restored ??= restoreDependencyCache(vitest)
+				restored ??= restoreDependencyCache(vitest, maxShards)
 				await restored
 			}
 			// With `--changed`, vitest measures coverage for the changed files
