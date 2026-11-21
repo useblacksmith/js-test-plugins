@@ -119,7 +119,9 @@ class Repo {
 		this.git('init', '-q', '-b', 'main')
 		this.git('config', 'user.email', 'ci@example.com')
 		this.git('config', 'user.name', 'ci')
-		this.commit('initial')
+		// Named, so two repositories made in the same second are not one commit
+		// to the cache, which names its entries by it.
+		this.commit(`initial ${name}`)
 		repos.push(this)
 	}
 
@@ -159,6 +161,12 @@ class Repo {
 	snapshot(key = ''): Snapshot | null {
 		const file = this.snapshotFile(key)
 		return file ? (JSON.parse(readFileSync(file, 'utf8')) as Snapshot) : null
+	}
+
+	/** The test files the stored snapshot vouches for in any project, sorted. */
+	vouched(key = ''): string[] | undefined {
+		const tests = this.snapshot(key)?.tests
+		return tests && [...new Set(Object.values(tests).flat())].sort()
 	}
 
 	/** Overwrites fields of the stored snapshot, standing in for a snapshot another run produced. */
@@ -235,7 +243,7 @@ describe('--changed against the tree snapshot', () => {
 			`[blacksmith] filtered out 0 of ${TESTS.length} test files as unaffected, ran ${TESTS.length}`,
 		)
 		expect(repo.snapshot()).toMatchObject({
-			version: 10,
+			version: 11,
 			head: repo.git('rev-parse', 'HEAD').trim(),
 			root: '',
 			shard: null,
@@ -630,14 +638,20 @@ describe('sharding', () => {
 
 	test('a test the snapshot does not vouch for reruns even with its dependencies unchanged', async () => {
 		await repo.run('--shard=1/2')
-		expect(repo.snapshot(SHARD_1_OF_2)?.tests).toEqual(
+		expect(repo.vouched(SHARD_1_OF_2)).toEqual(
 			owned(1, 2)
 				.map((name) => `src/${name}.test.ts`)
 				.sort(),
 		)
 		const [moved, ...rest] = owned(1, 2)
 		repo.patchSnapshot(
-			{ tests: rest.map((name) => `src/${name}.test.ts`) },
+			{
+				tests: Object.fromEntries(
+					Object.keys(repo.snapshot(SHARD_1_OF_2)?.tests ?? {}).map(
+						(project) => [project, rest.map((name) => `src/${name}.test.ts`)],
+					),
+				),
+			},
 			SHARD_1_OF_2,
 		)
 		const run = await repo.run('--changed', '--shard=1/2')
@@ -693,7 +707,7 @@ describe('snapshot is only written by runs that cover the shard', () => {
 		)
 		const after = repo.snapshot()
 		expect(after?.tree['src/lib/a.ts']).not.toBe(before?.tree['src/lib/a.ts'])
-		expect(after?.tests).toEqual(
+		expect(repo.vouched()).toEqual(
 			TESTS.filter((name) => !['one', 'two'].includes(name))
 				.map((name) => `src/${name}.test.ts`)
 				.sort(),
@@ -706,7 +720,7 @@ describe('snapshot is only written by runs that cover the shard', () => {
 		const fixed = await repo.run('--changed')
 		expect(fixed.exitCode, fixed.output).toBe(0)
 		expect(fixed.ran).toEqual(['one', 'two'])
-		expect(repo.snapshot()?.tests).toEqual(
+		expect(repo.vouched()).toEqual(
 			[...TESTS].map((name) => `src/${name}.test.ts`).sort(),
 		)
 		expect((await repo.run('--changed')).ran).toEqual([])
@@ -1102,7 +1116,7 @@ describe('what a snapshot may vouch for', () => {
 		const forced = await repo.run('--changed')
 		expect(forced.ran).toEqual([...TESTS].sort())
 		expect(forced.exitCode).toBe(1)
-		expect(repo.snapshot()?.tests).not.toContain('src/flaky.test.ts')
+		expect(repo.vouched()).not.toContain('src/flaky.test.ts')
 		delete repo.env.BLACKSMITH_FLAKY
 		const next = await repo.run('--changed')
 		expect(next.ran).toEqual(['flaky'])
@@ -1126,7 +1140,7 @@ describe('what a snapshot may vouch for', () => {
 		repo.write('src/one.test.ts', `${source}\nconst broken = (\n`)
 		const broken = await repo.run('--changed')
 		expect(broken.exitCode, broken.output).toBe(1)
-		expect(repo.snapshot()?.tests).not.toContain('src/one.test.ts')
+		expect(repo.vouched()).not.toContain('src/one.test.ts')
 		const again = await repo.run('--changed')
 		expect(again.ran).toEqual(['one'])
 		expect(again.exitCode, again.output).toBe(1)
@@ -1154,11 +1168,11 @@ describe('what a snapshot may vouch for', () => {
 		)
 		expect(failed.exitCode, failed.output).toBe(1)
 		expect(failed.output).toContain('coverage thresholds failed')
-		expect(repo.snapshot()?.tests).toEqual([])
+		expect(repo.vouched()).toEqual([])
 		const next = await repo.run('--changed', ...coverage)
 		expect(next.ran).toEqual([...TESTS].sort())
 		expect(next.exitCode, next.output).toBe(0)
-		expect(repo.snapshot()?.tests).toHaveLength(TESTS.length)
+		expect(repo.vouched()).toHaveLength(TESTS.length)
 		// A snapshot that vouched for every test stops doing so.
 		const again = await repo.run(
 			'--changed',
@@ -1166,7 +1180,7 @@ describe('what a snapshot may vouch for', () => {
 			'--coverage.thresholds.lines=100',
 		)
 		expect(again.exitCode, again.output).toBe(1)
-		expect(repo.snapshot()?.tests).toEqual([])
+		expect(repo.vouched()).toEqual([])
 		expect((await repo.run('--changed')).ran).toEqual([...TESTS].sort())
 	})
 
@@ -1427,7 +1441,7 @@ describe('the dependency record travels through the Actions cache', () => {
 		const first = await producer.run()
 		expect(first.exitCode, first.output).toBe(0)
 		expect(first.output).toContain(
-			`saved dependency cache blacksmith-vitest-v10-${runtimeId()}-all-shard0-`,
+			`saved dependency cache blacksmith-vitest-v11-${runtimeId()}-all-shard0-`,
 		)
 		expect([...cache.entries.values()].filter((e) => e.final)).toHaveLength(1)
 
@@ -1436,7 +1450,7 @@ describe('the dependency record travels through the Actions cache', () => {
 		const restored = await consumer.run('--changed')
 		expect(restored.exitCode, restored.output).toBe(0)
 		expect(restored.output).toContain(
-			`restored dependency cache blacksmith-vitest-v10-${runtimeId()}-all-shard0-`,
+			`restored dependency cache blacksmith-vitest-v11-${runtimeId()}-all-shard0-`,
 		)
 		expect(restored.ran).toEqual([])
 
@@ -1517,7 +1531,7 @@ describe('the dependency record travels through the Actions cache', () => {
 		expect(clean.ran).toEqual([...TESTS].sort())
 		expect(clean.output).toMatch(
 			new RegExp(
-				`shadow: would have run 0 of \\d+ test files \\(0 files changed since [0-9a-f]{12}, from blacksmith-vitest-v10-${runtimeId()}-all-shard0-`,
+				`shadow: would have run 0 of \\d+ test files \\(0 files changed since [0-9a-f]{12}, from blacksmith-vitest-v11-${runtimeId()}-all-shard0-`,
 			),
 		)
 		expect(clean.output).not.toContain('restored dependency cache')
@@ -1654,6 +1668,77 @@ describe('the dependency record travels through the Actions cache', () => {
 		const run = await again.run('--changed', `--shard=${owner}`)
 		expect(run.ran, run.output).toEqual(['flaky'])
 		expect(run.exitCode, run.output).toBe(0)
+	})
+
+	test('a test file two shards run, each in a project of its own, is vouched for in each', async () => {
+		// Vitest shards a test file once per project: of the fixture's two
+		// copies of shared.test.ts, each shard of two runs one.
+		const make = (name: string, note: string, failIn = ''): Repo => {
+			const repo = new Repo(name, 'fixture-projects')
+			repo.env = {
+				ACTIONS_RESULTS_URL: cache.url,
+				BLACKSMITH_FAIL_IN: failIn,
+			}
+			const config = path.join(repo.cwd, 'vitest.config.ts')
+			writeFileSync(
+				config,
+				readFileSync(config, 'utf8').replace(
+					/name: '(\w+)',/g,
+					"name: '$1', env: { BLACKSMITH_PROJECT: '$1' },",
+				),
+			)
+			repo.write(
+				'src/shared.test.ts',
+				`import { expect, test } from 'vitest'\n\ntest('runs in every project', () => {\n\texpect(process.env.BLACKSMITH_PROJECT).not.toBe(process.env.BLACKSMITH_FAIL_IN)\n})\n// ${note}\n`,
+			)
+			repo.commit(name)
+			return repo
+		}
+		const producer = make('split-producer', 'first')
+		for (const shard of ['1/2', '2/2']) {
+			const run = await producer.run(`--shard=${shard}`)
+			expect(run.exitCode, run.output).toBe(0)
+			expect(run.ran, run.output).toEqual(['shared'])
+		}
+		for (const shard of ['1/2', '2/2']) {
+			const run = await make(`split-same-${shard[0]}`, 'first').run(
+				'--changed',
+				`--shard=${shard}`,
+			)
+			expect(run.ran, run.output).toEqual([])
+		}
+		// It fails in one project, on the shard that runs it there.
+		let failed = ''
+		let passed = ''
+		for (const shard of ['1/2', '2/2']) {
+			const run = await make(`split-fails-${shard[0]}`, 'second', 'second').run(
+				'--changed',
+				`--shard=${shard}`,
+			)
+			expect(run.ran, run.output).toEqual(['shared'])
+			if (run.exitCode === 0) passed = shard
+			else failed = shard
+		}
+		expect([failed, passed].sort()).toEqual(['1/2', '2/2'])
+		// The other shard passes it once more, in its own project, after that.
+		const later = await make('split-later', 'third', 'second').run(
+			'--changed',
+			`--shard=${passed}`,
+		)
+		expect(later.ran, later.output).toEqual(['shared'])
+		expect(later.exitCode, later.output).toBe(0)
+		// That does not vouch for the project it failed in.
+		const again = await make('split-again', 'third').run(
+			'--changed',
+			`--shard=${failed}`,
+		)
+		expect(again.ran, again.output).toEqual(['shared'])
+		expect(again.exitCode, again.output).toBe(0)
+		const rest = await make('split-rest', 'third').run(
+			'--changed',
+			`--shard=${passed}`,
+		)
+		expect(rest.ran, rest.output).toEqual([])
 	})
 
 	test('more shards than maxShards fails the run', async () => {

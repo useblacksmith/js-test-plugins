@@ -19,6 +19,8 @@ export interface Source {
 	units: string
 	fromRoot: ReadonlySet<string>
 	fromRepo: ReadonlySet<string>
+	/** The same test files with the project each is taken for: `<project>\0<path from the root>`. A test file two shards run, each in a project of its own, comes from two entries. */
+	inProject: ReadonlySet<string>
 }
 
 async function readJson<T>(file: string): Promise<T | null> {
@@ -41,17 +43,20 @@ export async function mergeRecords(
 ): Promise<void> {
 	let records: DependencyRecords | null = null
 	let packages: PackageRecords | null = null
+	// Test files an earlier source was taken for: a later one adds to their rows.
+	const claimed = new Set<string>()
 	for (const source of sources) {
 		const theirs = await readJson<DependencyRecords>(source.records)
 		if (theirs !== null && typeof theirs.projects === 'object') {
 			if (records === null) records = theirs
-			else if (records.version === theirs.version) addRecords(records, theirs, source.fromRoot)
+			else if (records.version === theirs.version) addRecords(records, theirs, source.inProject)
 		}
 		const loaded = await readPackages(source.dir)
 		if (loaded !== null) {
 			if (packages === null) packages = loaded
-			else addPackages(packages, loaded, source.fromRepo)
+			else addPackages(packages, loaded, source.fromRepo, claimed)
 		}
+		for (const test of source.fromRepo) claimed.add(test)
 	}
 	if (records !== null) await writeFile(into.records, JSON.stringify(records))
 	if (packages !== null) await writePackages(path.join(into.dir, PACKAGES_FILE), packages)
@@ -64,7 +69,9 @@ function addRecords(
 	tests: ReadonlySet<string>,
 ): void {
 	for (const [name, theirs] of Object.entries(from.projects)) {
-		const taken = Object.entries(theirs.files).filter(([test]) => tests.has(test))
+		const taken = Object.entries(theirs.files).filter(([test]) =>
+			tests.has(`${name}\0${test}`),
+		)
 		if (taken.length === 0) continue
 		// The project's own dependencies (config, globalSetup) come with it
 		// only when no entry before this one recorded the project.
@@ -97,11 +104,24 @@ function addPackages(
 	into: PackageRecords,
 	from: PackageRecords,
 	tests: ReadonlySet<string>,
+	claimed: ReadonlySet<string>,
 ): void {
 	const incomplete = new Set(into.incomplete ?? [])
 	const theirs = new Set(from.incomplete ?? [])
 	for (const test of tests) {
 		const loaded = from.files[test]
+		if (claimed.has(test)) {
+			// What it loaded in the projects of both entries.
+			const known = into.files[test]
+			if (known === undefined || loaded === undefined) {
+				delete into.files[test]
+				incomplete.add(test)
+			} else {
+				into.files[test] = [...new Set([...known, ...loaded])]
+				if (theirs.has(test)) incomplete.add(test)
+			}
+			continue
+		}
 		if (loaded === undefined) delete into.files[test]
 		else into.files[test] = loaded
 		if (theirs.has(test)) incomplete.add(test)
@@ -124,6 +144,16 @@ async function mergeUnits(sources: readonly Source[], into: string): Promise<voi
 	if (base === undefined) return
 	const merged = await readUnits(base.units)
 	if (merged === null) return
+	// A test file taken from two entries, for a project each: neither holds
+	// all it entered, so it has no row and reruns with any file it loaded.
+	const claimed = new Set(base.fromRepo)
+	const twice = new Set<string>()
+	for (const source of others) {
+		for (const test of source.fromRepo) {
+			if (claimed.has(test)) twice.add(test)
+			claimed.add(test)
+		}
+	}
 	for (const source of others) {
 		for (const test of source.fromRepo) delete merged.tests[test]
 		const theirs = await readUnits(source.units)
@@ -136,7 +166,7 @@ async function mergeUnits(sources: readonly Source[], into: string): Promise<voi
 		Object.assign(merged.modules, theirs.modules)
 		for (const test of source.fromRepo) {
 			const entered = theirs.tests[test]
-			if (entered !== undefined) merged.tests[test] = entered
+			if (entered !== undefined && !twice.has(test)) merged.tests[test] = entered
 		}
 	}
 	await writeUnits(into, merged)

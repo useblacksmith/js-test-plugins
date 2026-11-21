@@ -242,6 +242,8 @@ export async function updateUnits(
 	units: string,
 	recordRoot: string | undefined,
 	partial: boolean,
+	/** Test files (repo-relative) the shard runs in some of their projects only: what they entered in the others stays, like a partial run's. */
+	split: ReadonlySet<string> = new Set(),
 ): Promise<void> {
 	const records = (await readUnits(units)) ?? {
 		version: UNITS_VERSION,
@@ -277,7 +279,7 @@ export async function updateUnits(
 	}
 	for (const [test, ran] of fresh) {
 		const previous = records.tests[test]
-		if (partial) {
+		if (partial || split.has(test)) {
 			if (!previous) continue
 			for (const [module, entered] of Object.entries(previous)) {
 				const all = (ran[module] ??= new Set())
