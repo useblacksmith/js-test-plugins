@@ -446,6 +446,10 @@ describe('narrow: module digests', () => {
 			['class C { static d = c() }', 'Object.values(P)'],
 			// A method the module replaces, a function it writes over, and an assignment that throws.
 			['Array.prototype.map = c', "['b'].map((b) => b)"],
+			['function patch() { globalThis.Math.abs = c }', 'Math.abs(2)'],
+			['function patch() { window.Math.abs = c }', 'Math.abs(2)'],
+			// A function expression that calls itself by its own name, which a function of the module has as well.
+			['', '[1].map(function kept(b) { return kept(b) })'],
 			['Object.assign(Array.prototype, c)', "['b'].map((b) => b)"],
 			['for (kept of [counted]) {}', 'kept(P.b)'],
 			['function patch() { c(Array) }', "['b'].map((b) => b)"],
@@ -502,6 +506,17 @@ describe('narrow: module digests', () => {
 			'const P = {}\nfunction c() { Object[d] = e }\nexport const a = Object.values(P)',
 		]) {
 			expect(digest(code).units['a']?.effects, code).toBe(true)
+		}
+		// What a call gives is extended, taken apart or made a key of, any of which may throw.
+		for (const code of [
+			'export class a extends Math.abs(1) {}',
+			'export const a = class extends Math.abs(1) {}',
+			'export const [a] = Math.abs(1)',
+			'const pick = (b: number) => (b ? { a: 1 } : null)\nexport const { a } = pick(0)',
+			'export class a { [Math.abs(1)]() {} }',
+			'export class a { static [Math.abs(1)] = 1 }',
+		]) {
+			expect(Object.values(digest(code).units).some((unit) => unit.effects), code).toBe(true)
 		}
 		expect(digest('export function a() { b() }').units['a']?.effects).toBeUndefined()
 		for (const code of ['export default c()', 'export default class { static c = d() }', 'export class a { static c = d() }']) {

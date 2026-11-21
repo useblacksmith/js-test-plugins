@@ -277,6 +277,10 @@ function effects(node: Node | null | undefined, scope: Module): boolean {
 	if (node.type === 'ArrowFunctionExpression' || node.type === 'FunctionExpression') return false
 	if (node.type === 'FunctionDeclaration') return false
 	if (node.type === 'CallExpression' || node.type === 'NewExpression') return value(node, scope.root, scope) === undefined
+	// What a call gives may be nothing to extend or take apart, and a key made of one may not be told.
+	if ((node.type === 'ClassDeclaration' || node.type === 'ClassExpression') && runs(node.superClass)) return true
+	if (node.type === 'VariableDeclarator' && node.id?.type !== 'Identifier' && runs(node.init)) return true
+	if ((node.type === 'MethodDefinition' || node.type === 'PropertyDefinition') && node.computed && runs(node.key)) return true
 	// A decorator runs as the class is made, whatever it is on.
 	if (node.type === 'MethodDefinition') {
 		return (
@@ -319,7 +323,7 @@ const REACH = new Set([
 ])
 
 /** The builtins whose methods a value is told by, which a key may name as well. */
-const BUILTINS = new Set(['Array', 'Object', 'String', 'Number', 'Boolean', 'Set', 'Map'])
+const BUILTINS = new Set(['Array', 'Object', 'String', 'Number', 'Boolean', 'Set', 'Map', 'Math'])
 
 /** The names of what holds every builtin, and the keys of it that are itself again. */
 const HOLDERS = new Set(['globalThis', 'global', 'window', 'self'])
