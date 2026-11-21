@@ -450,6 +450,7 @@ describe('narrow: module digests', () => {
 			['function patch() { c(Object) }', 'String(P)'],
 			['function patch() { Array.prototype.push = c }', 'kept(P.b)'],
 			['function patch() { Object.prototype.toString = c }', 'String(P)'],
+			['function patch() { \\u0041rray.from = c }', "['b'].map((b) => b)"],
 			['function patch() { Object.getPrototypeOf([]).map = c }', "['b'].map((b) => b)"],
 			['function fixed(b: string) { const d = b; d = b; return d }', 'fixed(P.b)'],
 			['@c class C {}', 'Object.values(P)'],

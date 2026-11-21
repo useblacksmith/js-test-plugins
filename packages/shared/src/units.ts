@@ -315,7 +315,8 @@ function loud(program: Node, own: (name: string) => boolean, code: string): Set<
 		},
 		fns: new Map(),
 		// By the text alone: a method replaced there runs wherever the language calls it itself.
-		patched: /prototype|PrototypeOf|__proto__/.test(code),
+		// An escape may spell any of these names, here or where `taken` looks for one.
+		patched: /prototype|PrototypeOf|__proto__|\\u/.test(code),
 		root: new Scope(),
 		budget: { left: 20000 },
 	}
