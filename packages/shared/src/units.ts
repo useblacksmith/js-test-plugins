@@ -186,8 +186,6 @@ function taken(node: Node | null | undefined, name: string, held = false): boole
 		return false
 	}
 	if (node.type === 'MemberExpression') {
-		// What holds its methods may be handed on to be changed.
-		if (!node.computed && node.property.name === 'prototype' && rooted(node, name)) return true
 		return taken(node.object, name, !node.computed) || (node.computed && taken(node.property, name))
 	}
 	if (node.type === 'CallExpression' || node.type === 'NewExpression') {
@@ -305,7 +303,7 @@ function effects(node: Node | null | undefined, scope: Module): boolean {
  * make a value, read in the order they are evaluated. A `const` counts as
  * written, for what is made of it later, until something that may do more runs.
  */
-function loud(program: Node, own: (name: string) => boolean): Set<Node> {
+function loud(program: Node, own: (name: string) => boolean, code: string): Set<Node> {
 	const found = new Set<Node>()
 	const names = new Map<string, boolean>()
 	const scope: Module = {
@@ -315,6 +313,8 @@ function loud(program: Node, own: (name: string) => boolean): Set<Node> {
 			return names.get(name)!
 		},
 		fns: new Map(),
+		// By the text alone: a method replaced there runs wherever the language calls it itself.
+		patched: /prototype|PrototypeOf|__proto__/.test(code),
 		root: new Scope(),
 		budget: { left: 20000 },
 	}
@@ -835,7 +835,7 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 
 	const own = (name: string): boolean =>
 		names.has(name) || imported.some((entry) => entry.names.some(([, local]) => local === name))
-	const louds = loud(program, own)
+	const louds = loud(program, own, code)
 
 	holes.sort((a, b) => a[0] - b[0])
 	const text = (start: number, end: number): string => {

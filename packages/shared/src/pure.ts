@@ -74,6 +74,8 @@ export interface Module {
 	fns: Map<string, Node>
 	/** The `const`s of the top level that are still as written. */
 	root: Scope
+	/** Whether the module may reach what holds the language's own methods, and so replace one. */
+	patched: boolean
 	/** What is left to look at before giving up. */
 	budget: { left: number }
 }
@@ -185,21 +187,10 @@ interface Run {
  * the module's on it. `undefined` when that cannot be told.
  */
 export function value(node: Node | null | undefined, scope: Scope, mod: Module): Val | undefined {
-	return evaluate(node, scope, { mod, stack: new Set() })
+	return mod.patched ? undefined : evaluate(node, scope, { mod, stack: new Set() })
 }
 
 /** Whether `name` is the language's where it is read. */
-/** What holds the methods of each kind. */
-const MAKERS: Record<NonNullable<Kind>, string> = {
-	string: 'String',
-	number: 'Number',
-	boolean: 'Boolean',
-	array: 'Array',
-	object: 'Object',
-	set: 'Set',
-	map: 'Map',
-}
-
 function native(name: string, scope: Scope, run: Run): boolean {
 	return !scope.holder(name) && !run.mod.own(name) && !run.mod.taken(name)
 }
@@ -372,8 +363,6 @@ function called(node: Node, scope: Scope, run: Run): Val | undefined {
 	}
 	const methods = self?.kind ? METHODS[self.kind] : undefined
 	if (!self || !methods || !Object.hasOwn(methods, name)) return undefined
-	// A method the module may have replaced is not the language's.
-	if (!native(MAKERS[self.kind!], scope, run)) return undefined
 	const spec = methods[name]!
 	if (args.length < spec.min || args.length > spec.args.length) return undefined
 	let result: Val | undefined
