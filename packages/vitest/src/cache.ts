@@ -67,7 +67,7 @@ export function cacheKey(input: {
 			: 'all',
 		// The shard's number without the count: a run on another count finds
 		// every entry, and takes each test file's record from the one that has it.
-		`shard${input.shard?.index ?? 1}`,
+		`shard${input.shard?.index ?? 0}`,
 	].join('-')
 	const prefix = `${DEFAULT_CACHE_PREFIX}-${scope}-`
 	return { key: `${prefix}${input.head}`, prefix }

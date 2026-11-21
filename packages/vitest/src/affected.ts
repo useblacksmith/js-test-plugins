@@ -144,7 +144,7 @@ export interface Snapshot {
 	tree: Tree
 	/** Repo-relative test files the run vouches for, sorted: passed, or deselected by our provider as unchanged. A test outside this set (never run, failed, interrupted) reruns whatever its record says. */
 	tests: string[]
-	/** When each of `tests` last ran and passed, in milliseconds: of the entries that vouch for a test file, the one with the latest run is used. One missing here ran at `at`. */
+	/** When each of `tests` last passed or was found unaffected by the shard that owns it, in milliseconds: of the entries that vouch for a test file, the one with the latest time is used. One missing here has `at`. */
 	times: Record<string, number>
 	/**
 	 * Test files that were left out (failed, or never reached) and when: an
@@ -827,9 +827,14 @@ export class TreeSnapshotProvider {
 		}
 		// A test file no entry vouches for: new, failed last time, or never run.
 		const owns = await shardOwner(this.vitest)
+		const unvouched = new Set<string>()
 		for (const specification of specifications) {
 			const file = specification.moduleId
-			if (owns(file) && !taken.has(file)) run.add(file)
+			if (owns(file) && !taken.has(file)) unvouched.add(file)
+		}
+		for (const file of unvouched) run.add(file)
+		if (unvouched.size > 0) {
+			log(`${unvouched.size} test files no cache entry vouches for`)
 		}
 		for (const file of taken) if (!run.has(file)) this.deselected.add(file)
 		if (spared > 0) {
@@ -1667,12 +1672,13 @@ export async function restoreDependencyCache(
 	}
 	const cacheDir = vitest.vite.config.cacheDir
 	const records = path.basename(recordsPath(vitest, cacheDir))
-	const own = vitest.config.shard?.index ?? 1
+	// An unsharded run is number 0: it saves beside shard 1, not in its place.
+	const own = vitest.config.shard?.index ?? 0
 	let failure: string | null = null
 	// Every shard's entry, whatever count they were saved under: a test file
 	// that another shard ran last has its record there.
 	const fetched = await pooled(
-		Array.from({ length: Math.max(maxShards, own) }, (_, at) => at + 1),
+		Array.from({ length: Math.max(maxShards, own) + 1 }, (_, at) => at),
 		RESTORES_AT_ONCE,
 		async (index) => {
 			const dir = await mkdtemp(path.join(tmpdir(), 'blacksmith-entry-'))
@@ -1863,7 +1869,7 @@ async function adoptSnapshot(
 		}
 		const candidate: Snapshot | null =
 			snapshot === null ? await readSnapshot(file) : null
-		if (candidate !== null && (candidate.shard?.index ?? 1) === index) {
+		if (candidate !== null && (candidate.shard?.index ?? 0) === index) {
 			theirs = file
 			snapshot = candidate
 			continue
