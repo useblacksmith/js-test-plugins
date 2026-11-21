@@ -76,6 +76,8 @@ export interface Analysis {
 	digest: Digest
 	/** Insertions that make each `f` unit report its first statement running: offset, text. */
 	marks: Array<[number, string]>
+	/** Where the directives the module starts with (`'use strict'`) end, 0 without any: code put before them would switch them off. */
+	prologue: number
 }
 
 type Node = { type: string; start: number; end: number; [key: string]: any }
@@ -511,6 +513,11 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 		comments = result.comments
 	} catch {
 		return null
+	}
+	let prologue = 0
+	for (const statement of program.body as Node[]) {
+		if (statement.type !== 'ExpressionStatement' || !statement.directive) break
+		prologue = statement.end
 	}
 	const typescript = language === 'ts' || language === 'tsx'
 	// Stretches of source that never reach the runtime: types and comments.
@@ -1089,6 +1096,7 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 				opaque: true,
 			},
 			marks: [],
+			prologue,
 		}
 	}
 	const restRefs = refsOf(restIds, null)
@@ -1109,6 +1117,7 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 			wild,
 		},
 		marks,
+		prologue,
 	}
 }
 

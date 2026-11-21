@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 
-import { HIT } from '../../core/src/hits.ts'
+import { HIT, LOADED } from '../../core/src/hits.ts'
 import { resolveDigest } from '../../core/src/narrow.ts'
 import { isPackagePath } from '../../core/src/packages.ts'
 import { analyze, globalFooter } from '../../core/src/units.ts'
@@ -37,10 +37,23 @@ export function sourceFile(repo: string, absolute: string): string | null {
 export function mark(code: string, filename: string, key: string): string | null {
 	const analysis = analyze(code, filename, key)
 	if (!analysis) return null
-	const call = (name: string) => `globalThis.${HIT}?.(${JSON.stringify(key)},${JSON.stringify(name)});`
-	// After a `#!` line, which has to stay the first.
-	const start = code.startsWith('#!') ? code.indexOf('\n') + 1 || code.length : 0
-	const marks: Array<[number, string]> = [[start, call(STARTED)], ...analysis.marks]
+	// TypeScript checked strictly refuses a name `globalThis` is not declared
+	// to have: there the global object is reached through a variable of type `any`.
+	const typed = /\.[cm]?tsx?$/.test(filename)
+	const plain = `globalThis.${HIT}`
+	const target = typed ? `(${GLOBAL}??=Function("return this")()).${HIT}` : plain
+	const call = (name: string) => `${target}?.(${JSON.stringify(key)},${JSON.stringify(name)});`
+	// After the directives, which only count at the start, or after a `#!` line, which has to stay the first.
+	const start =
+		analysis.prologue > 0
+			? analysis.prologue
+			: code.startsWith('#!')
+				? code.indexOf('\n') + 1 || code.length
+				: 0
+	const marks: Array<[number, string]> = [
+		[start, `${analysis.prologue > 0 ? ';' : ''}${call(STARTED)}`],
+		...analysis.marks.map(([at, text]): [number, string] => [at, text.replace(plain, target)]),
+	]
 	let out = ''
 	let from = 0
 	// `sort` is stable: two marks at one offset stay in the order they were given.
@@ -48,8 +61,14 @@ export function mark(code: string, filename: string, key: string): string | null
 		out += code.slice(from, at) + text
 		from = at
 	}
-	return out + code.slice(from) + globalFooter(key)
+	out += code.slice(from)
+	// `var` is hoisted: a function called before this line finds the variable, still empty.
+	return typed
+		? `${out}\n;;var ${GLOBAL}=Function("return")();${call(LOADED)}`
+		: out + globalFooter(key)
 }
+
+const GLOBAL = `${HIT}_g`
 
 const EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']
 
