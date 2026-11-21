@@ -37,7 +37,7 @@ export function stableShards(Theirs: SequencerClass): SequencerClass {
 			files: TestSpecification[],
 		): Promise<TestSpecification[]> => {
 			const owns = await shardOwner(this.#vitest)
-			return files.filter((file) => owns(file.moduleId))
+			return files.filter((file) => owns(file.moduleId, file.project.name))
 		}
 	}
 }
@@ -49,15 +49,22 @@ export function stableShards(Theirs: SequencerClass): SequencerClass {
  */
 export async function shardOwner(
 	vitest: Vitest,
-): Promise<(moduleId: string) => boolean> {
+): Promise<(moduleId: string, project?: string) => boolean> {
 	if (!vitest.config.shard) return () => true
 	const configured = vitest.config.sequence.sequencer
 	const Theirs =
 		(configured as { [WRAPPED]?: SequencerClass })[WRAPPED] ?? configured
-	const owned = new Set(
-		(await new Theirs(vitest).shard(await vitest.globTestSpecifications())).map(
-			(specification) => specification.moduleId,
-		),
-	)
-	return (moduleId) => owned.has(moduleId)
+	// A sequencer shards specifications, so a test file of two projects can be on two shards.
+	const owned = new Map<string, Set<string>>()
+	for (const specification of await new Theirs(vitest).shard(
+		await vitest.globTestSpecifications(),
+	)) {
+		const projects = owned.get(specification.moduleId) ?? new Set()
+		projects.add(specification.project.name)
+		owned.set(specification.moduleId, projects)
+	}
+	return (moduleId, project) =>
+		project === undefined
+			? owned.has(moduleId)
+			: owned.get(moduleId)?.has(project) === true
 }

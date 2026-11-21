@@ -1216,7 +1216,8 @@ export class ShadowAnalysis {
 		const { root } = vitest.config
 		const owns = await shardOwner(vitest)
 		const specifications = (await vitest.globTestSpecifications()).filter(
-			(specification) => owns(specification.moduleId),
+			(specification) =>
+				owns(specification.moduleId, specification.project.name),
 		)
 		const owned = [
 			...new Set(specifications.map((specification) => specification.moduleId)),
@@ -1347,7 +1348,7 @@ export class SnapshotRecorder implements Reporter {
 		const owned = new Set(
 			(await this.vitest.globTestSpecifications())
 				.map((specification) => specification.moduleId)
-				.filter(owns),
+				.filter((file) => owns(file)),
 		)
 		let ran = 0
 		let filtered = 0
@@ -1593,7 +1594,7 @@ export class SnapshotRecorder implements Reporter {
 			...new Set(
 				(await this.vitest.globTestSpecifications())
 					.map((specification) => specification.moduleId)
-					.filter(owns),
+					.filter((file) => owns(file)),
 			),
 		]
 		// Nothing owned (an `include` matching no file) vouches for nothing.
