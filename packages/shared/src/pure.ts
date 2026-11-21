@@ -470,6 +470,8 @@ interface Frame {
 /** What `fn` gives when called with `vals`, if all it runs is as `evaluate` tells. */
 function apply(fn: Node, vals: Val[], closure: Scope, run: Run): Val | undefined {
 	if (fn.async || fn.generator || !fn.body || run.stack.has(fn) || bound(fn.params) || bound(fn.body)) return undefined
+	// A function expression's own name is what it calls by it, whatever else of the module has the name.
+	if (fn.type === 'FunctionExpression' && fn.id) return undefined
 	const top = new Scope(closure)
 	const frame: Frame = {
 		run,
