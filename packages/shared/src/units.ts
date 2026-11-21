@@ -160,9 +160,6 @@ function unwrap(node: Node | null | undefined): Node | null {
 }
 
 const EFFECTS = new Set([
-	'CallExpression',
-	'NewExpression',
-	'TaggedTemplateExpression',
 	'AwaitExpression',
 	'YieldExpression',
 	'AssignmentExpression',
@@ -170,26 +167,186 @@ const EFFECTS = new Set([
 	'ImportExpression',
 	'StaticBlock',
 	'Decorator',
+	'TaggedTemplateExpression',
 ])
 
-/** Whether evaluating `node` may do more than make a value: what a function or an instance runs later is left out. */
-function effects(node: Node | null | undefined): boolean {
+/** What the module has declared so far that is still as written, and which names are its own. */
+interface Scope {
+	/** A name the module declares or imports, which is then not the language's. */
+	own(name: string): boolean
+	/** Each `const` of literals, while nothing but the language's own code has run since it was made. */
+	plain: Set<string>
+	/** Those of `plain` that are an object or an array, which a read does not throw on. */
+	objects: Set<string>
+}
+
+/** Whether `node` is written as an object or an array, or names a `const` that is. */
+function holder(node: Node | null | undefined, scope: Scope): boolean {
+	node = unwrap(node)
+	if (node?.type === 'Identifier') return scope.objects.has(node.name)
+	return node?.type === 'ObjectExpression' || node?.type === 'ArrayExpression'
+}
+
+/** The calls that read a value of literals and run nothing of the module's: it has no getter to reach. */
+const READS = new Set(['keys', 'values', 'entries'])
+
+/** Whether `node` is a value of literals: a literal, an object or an array of them, a `const` of `scope.plain` or a key of one, and operators on these. */
+function literal(node: Node | null | undefined, scope: Scope): boolean {
+	node = unwrap(node)
+	if (!node) return true
+	switch (node.type) {
+		case 'Literal':
+			return true
+		// An operator turns such a value into a string or a number with the language's own code.
+		case 'TemplateLiteral':
+			return (node.expressions as Node[]).every((part) => literal(part, scope))
+		case 'UnaryExpression':
+			return node.operator !== 'delete' && literal(node.argument, scope)
+		case 'BinaryExpression':
+		case 'LogicalExpression':
+			return node.operator !== 'instanceof' && node.operator !== 'in' && literal(node.left, scope) && literal(node.right, scope)
+		case 'ConditionalExpression':
+			return literal(node.test, scope) && literal(node.consequent, scope) && literal(node.alternate, scope)
+		case 'Identifier':
+			return scope.plain.has(node.name)
+		case 'MemberExpression':
+			return !node.computed && !node.optional && literal(node.object, scope)
+		case 'ArrayExpression':
+			// Spreading such a value copies it with the language's own code.
+			return (node.elements as Array<Node | null>).every(
+				(element) => element !== null && literal(element.type === 'SpreadElement' ? element.argument : element, scope),
+			)
+		case 'ObjectExpression':
+			return (node.properties as Node[]).every(
+				(property) =>
+					property.type === 'SpreadElement'
+						? literal(property.argument, scope)
+						: property.kind === 'init' && !property.method && !property.computed && literal(property.value, scope),
+			)
+		default:
+			return false
+	}
+}
+
+/**
+ * Whether the module names `Object` for more than reading a key off it: it may
+ * then bind the name in some scope, or put something of its own on it.
+ */
+function taken(node: Node | null | undefined, held = false): boolean {
 	if (!node || typeof node !== 'object') return false
-	if (Array.isArray(node)) return node.some(effects)
+	if (Array.isArray(node)) return node.some((child) => taken(child))
+	if (typeof node.type !== 'string') return false
+	if (node.type === 'Identifier') return node.name === 'Object' && !held
+	// A type of that name is not the value.
+	if ((node.type.startsWith('TS') && !VALUE_TS.has(node.type)) || node.importKind === 'type' || node.exportKind === 'type') {
+		return false
+	}
+	if (node.type === 'MemberExpression') {
+		return taken(node.object, !node.computed) || (node.computed && taken(node.property))
+	}
+	// What is written to, or deleted, is not read.
+	const written =
+		node.type === 'AssignmentExpression'
+			? node.left
+			: node.type === 'UpdateExpression' || (node.type === 'UnaryExpression' && node.operator === 'delete')
+				? node.argument
+				: null
+	if (written?.type === 'MemberExpression' && rooted(written)) return true
+	for (const key in node) {
+		if (key === 'type' || key === 'start' || key === 'end') continue
+		// The name of a key is not the name of a value.
+		if (key === 'key' && !node.computed) continue
+		if (key === 'typeAnnotation' || key === 'typeArguments' || key === 'typeParameters' || key === 'returnType') continue
+		const child = node[key]
+		if (child && typeof child === 'object' && taken(child)) return true
+	}
+	return false
+}
+
+/** Whether a chain of keys starts at `Object`. */
+function rooted(node: Node): boolean {
+	while (node.type === 'MemberExpression') node = node.object
+	return node.type === 'Identifier' && node.name === 'Object'
+}
+
+/** `Object.keys(x)`, `Object.values(x)` or `Object.entries(x)` of a value of literals. */
+function reads(node: Node, scope: Scope): boolean {
+	if (node.type !== 'CallExpression' || node.optional || node.arguments.length !== 1) return false
+	const callee = unwrap(node.callee)
+	if (callee?.type !== 'MemberExpression' || callee.computed || callee.optional) return false
+	const object = unwrap(callee.object)
+	if (object?.type !== 'Identifier' || object.name !== 'Object' || scope.own('Object')) return false
+	if (callee.property.type !== 'Identifier' || !READS.has(callee.property.name)) return false
+	// Of `null`, or of a key the value does not have, the read throws.
+	return holder(node.arguments[0], scope) && literal(node.arguments[0], scope)
+}
+
+/**
+ * Whether evaluating `node` may do more than make a value: what a function or
+ * an instance runs later is left out. A call counts, but for one of
+ * the language's that reads a value of literals.
+ */
+function effects(node: Node | null | undefined, scope: Scope): boolean {
+	if (!node || typeof node !== 'object') return false
+	if (Array.isArray(node)) return node.some((child) => effects(child, scope))
 	if (typeof node.type !== 'string') return false
 	if (EFFECTS.has(node.type)) return true
 	if (node.type === 'UnaryExpression' && node.operator === 'delete') return true
 	if (node.type === 'ArrowFunctionExpression' || node.type === 'FunctionExpression') return false
 	if (node.type === 'FunctionDeclaration') return false
-	if (node.type === 'MethodDefinition') return node.computed ? effects(node.key) : false
-	if (node.type === 'PropertyDefinition' && !node.static) return node.computed ? effects(node.key) : false
+	if (node.type === 'NewExpression') return true
+	if (node.type === 'CallExpression') return !reads(node, scope)
+	// A decorator runs as the class is made, whatever it is on.
+	if (node.type === 'MethodDefinition') {
+		return (
+			effects(node.decorators, scope) ||
+			(node.value?.params as Node[] | undefined)?.some((param) => effects(param.decorators, scope)) ||
+			(node.computed ? effects(node.key, scope) : false)
+		)
+	}
+	if (node.type === 'PropertyDefinition' && !node.static) {
+		return effects(node.decorators, scope) || (node.computed ? effects(node.key, scope) : false)
+	}
 	for (const key in node) {
 		if (key === 'type' || key === 'start' || key === 'end') continue
 		if (key === 'typeAnnotation' || key === 'typeArguments' || key === 'typeParameters') continue
 		const child = node[key]
-		if (child && typeof child === 'object' && effects(child)) return true
+		if (child && typeof child === 'object' && effects(child, scope)) return true
 	}
 	return false
+}
+
+/**
+ * The top-level declarations and statements of `program` that may do more than
+ * make a value, read in the order they are evaluated. A `const` counts as
+ * written, for what is made of it later, until something that may do more runs.
+ */
+function loud(program: Node, own: (name: string) => boolean): Set<Node> {
+	const found = new Set<Node>()
+	const mine = taken(program)
+	const scope: Scope = { own: (name) => own(name) || (name === 'Object' && mine), plain: new Set(), objects: new Set() }
+	const visit = (node: Node, constant: boolean): void => {
+		if (effects(node, scope)) {
+			found.add(node)
+			scope.plain.clear()
+			scope.objects.clear()
+		} else if (constant && node.id?.type === 'Identifier' && node.init && literal(node.init, scope)) {
+			scope.plain.add(node.id.name)
+			if (holder(node.init, scope)) scope.objects.add(node.id.name)
+		}
+	}
+	for (const statement of program.body as Node[]) {
+		const exported = statement.type === 'ExportNamedDeclaration' || statement.type === 'ExportDefaultDeclaration'
+		const node: Node = (exported && statement.declaration) || statement
+		if (node.type === 'VariableDeclaration') {
+			for (const declarator of node.declarations as Node[]) visit(declarator, node.kind === 'const')
+		} else {
+			visit(node, false)
+			// A unit may be the statement that exports the value.
+			if (found.has(node)) found.add(statement)
+		}
+	}
+	return found
 }
 
 function isFunction(node: Node | null): node is Node {
@@ -446,7 +603,8 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 		end: number
 		prefix: string
 		ids: Ids
-		effects?: boolean
+		/** For a `v`: what is evaluated as the module loads. */
+		evaluated?: Node
 		/** For an object literal of plain keys: where it is, and each key with its value. */
 		object?: { start: number; end: number; keys: Array<{ key: string; start: number; end: number; ids: Ids }> }
 	}
@@ -531,7 +689,7 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 				end: node.end,
 				prefix,
 				ids,
-				effects: effects(node),
+				evaluated: node,
 				...(object ? { object } : {}),
 			})
 		}
@@ -663,6 +821,10 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 		names.add(draft.name)
 	}
 
+	const own = (name: string): boolean =>
+		names.has(name) || imported.some((entry) => entry.names.some(([, local]) => local === name))
+	const louds = loud(program, own)
+
 	holes.sort((a, b) => a[0] - b[0])
 	const text = (start: number, end: number): string => {
 		let out = ''
@@ -776,7 +938,7 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 		}
 		const reads = readsOf(draft.ids, refs)
 		if (reads) next.reads = reads
-		if (draft.effects || previous?.effects) next.effects = true
+		if ((draft.evaluated && louds.has(draft.evaluated)) || previous?.effects) next.effects = true
 		if (draft.object && keyed.has(draft.name)) {
 			const { object } = draft
 			next.frame = hash(`${draft.prefix}${text(draft.start, object.start)}\0${text(object.end, draft.end)}`)
