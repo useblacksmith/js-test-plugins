@@ -54,8 +54,8 @@ for (const [mode, args] of [
 				run.files['test/a.test.js']?.tests['a reads a.json']?.deps,
 				['data/a.json'],
 			)
-			assert.ok(run.graph['src/config.js']?.includes('data/config.json'))
-			assert.ok(run.graph['src/loadtime.js']?.includes('data/loadtime.json'))
+			assert.ok(run.graph?.['src/config.js']?.includes('data/config.json'))
+			assert.ok(run.graph?.['src/loadtime.js']?.includes('data/loadtime.json'))
 		})
 	})
 }

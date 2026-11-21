@@ -54,6 +54,9 @@ and Mocha 10 or newer.
   by itself. A new version of a package loaded before the first spec file
   (Mocha, what `.mocharc.*` requires) runs everything.
 
+A `package.json` or `tsconfig*.json` in a directory below the project reruns
+the test files that loaded a file under that directory.
+
 Changes to anything else in `package.json`, to `tsconfig.json`, `.mocharc.*`
 or the workflow file run everything.
 

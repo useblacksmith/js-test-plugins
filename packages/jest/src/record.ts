@@ -4,7 +4,7 @@ import {
 	packageOf,
 	readDuringLoad,
 	repositoryPackage,
-} from '../../shared/src/packages.ts'
+} from '../../core/src/packages.ts'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -15,7 +15,7 @@ import {
 	Outputs,
 	isIgnored,
 	wrapFs,
-} from '../../shared/src/fs-recorder.ts'
+} from '../../core/src/fs-recorder.ts'
 import { ENV_RECORD } from './state.ts'
 
 /**
@@ -71,8 +71,8 @@ export interface Piece {
 function readByTest(): boolean {
 	return !readDuringLoad(
 		(line) =>
-			line.includes(`${path.sep}shared${path.sep}src${path.sep}fs-recorder.`) ||
-			line.includes(`${path.sep}shared${path.sep}src${path.sep}packages.`) ||
+			line.includes(`${path.sep}core${path.sep}src${path.sep}fs-recorder.`) ||
+			line.includes(`${path.sep}core${path.sep}src${path.sep}packages.`) ||
 			line.includes(here),
 		(line) => /[\\/](jest-(runtime|resolve|haste-map)|@jest[\\/]transform)[\\/]/.test(line),
 	)
@@ -176,8 +176,8 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const childRecorder = path.join(
 	here,
 	import.meta.url.endsWith('.ts')
-		? '../../shared/src/record-child.ts'
-		: '../../shared/src/record-child.js',
+		? '../../core/src/record-child.ts'
+		: '../../core/src/record-child.js',
 )
 
 /** `env` with the child recorder preloaded and `dir` to report to. */

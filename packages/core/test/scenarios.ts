@@ -293,6 +293,11 @@ export const scenarios: Scenario[] = [
 		[],
 	),
 	reruns(
+		'a tsconfig.json added in a directory reruns the test files that loaded a file below it',
+		(project) => project.change('data/tsconfig.json', '{ "compilerOptions": { "strict": true } }\n'),
+		['c'],
+	),
+	reruns(
 		'a package.json change reruns everything',
 		(project) => {
 			const manifest = JSON.parse(project.read('package.json')) as object

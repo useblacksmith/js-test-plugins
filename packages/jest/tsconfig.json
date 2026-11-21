@@ -12,5 +12,5 @@
 		"noEmit": true,
 		"types": ["node"]
 	},
-	"include": ["src", "test/*.ts", "../shared/src"]
+	"include": ["src", "test/*.ts", "../core/src"]
 }

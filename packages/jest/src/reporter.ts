@@ -7,28 +7,16 @@ import {
 } from 'node:fs'
 import path from 'node:path'
 
+import { toRelative } from '../../core/src/anchor.ts'
 import {
-	mergeRecords,
-	type FileRecord,
-	type Records,
-	type RunRecord,
-	type TestState,
-	loadRecords,
 	specKey,
 	specPath,
-	specProject,
-	type StoredRecords,
-} from './core.ts'
-import {
-	alwaysPaths,
-	readJson,
-	recordsFile,
-	save,
-	toRelative,
-	writeRecords,
-} from './project.ts'
-import { isPackagePath, PackageLinks } from '../../shared/src/packages.ts'
-import { dropUnits, updateUnits } from './narrow.ts'
+	type RunFile,
+	type RunRecord,
+	type TestRecord,
+} from '../../core/src/record.ts'
+import { readJson } from '../../core/src/store.ts'
+import type { Entered } from '../../core/src/unitstore.ts'
 import { endGlobals, type Piece } from './record.ts'
 import { ENV_RECORD, log, projectName, state } from './state.ts'
 
@@ -99,22 +87,19 @@ export default class BlacksmithReporter {
 
 	private async commit(root: string | undefined): Promise<void> {
 		const ctx = state()
-		const pending = ctx.pending
+		const { pending, session } = ctx
 		ctx.pending = null
-		if (!pending || !root) return
+		if (!pending || !session || !root) return
 		const { deps, global, manifests, ran } = readPieces(root, ctx.repo, ctx.shared)
-		const links = new PackageLinks(ctx.repo)
-		const run: RunRecord = {
-			at: Date.now(),
-			// Run from a workspace, the runner and transformers are linked there.
-			global: links.expand(global, [`${toRelative(ctx.repo, ctx.cwd) || '.'}/.`]),
-			files: {},
-			partial: this.partial,
-		}
+		const run: RunRecord = { at: Date.now(), global, files: {} }
+		const entered = new Map<string, Entered>()
 		for (const [file, results] of this.results) {
 			const recorded = deps.get(file)
-			const tests: Record<string, TestState> = {}
+			const tests: Record<string, TestRecord> = {}
 			let failed = recorded === undefined
+			const end = (name: string, state: TestRecord['state'], last: boolean): void => {
+				if (last || !tests[name]) tests[name] = { state }
+			}
 			for (const result of results) {
 				// A file that failed outside its tests reports no test, or tests that never ran.
 				if (
@@ -124,76 +109,31 @@ export default class BlacksmithReporter {
 					failed = true
 				}
 				for (const test of result.testResults) {
-					if (test.status === 'failed') tests[test.fullName] = 'failed'
-					else if (test.status === 'passed') tests[test.fullName] ??= 'passed'
+					if (test.status === 'failed') end(test.fullName, 'failed', true)
+					else if (test.status === 'passed') end(test.fullName, 'passed', false)
 					// With `-t`, the tests the pattern leaves out are reported as pending too.
-					else if (!this.partial) tests[test.fullName] ??= 'skipped'
+					else if (!this.partial) end(test.fullName, 'skipped', false)
 				}
 			}
-			const entry: FileRecord = {
-				deps: links.expand(recorded ?? [], [specPath(file)]),
+			const entry: RunFile = {
+				deps: [...(recorded ?? [])],
 				tests,
+				manifests: [...(manifests.get(file) ?? [])].sort(),
 			}
-			const read = [...(manifests.get(file) ?? [])].sort()
-			if (read.length > 0) entry.manifests = read
 			if (failed) entry.failed = true
+			if (this.partial) entry.partial = true
 			run.files[file] = entry
+			entered.set(file, { ran: ran.get(file), partial: this.partial })
 		}
-		// A changed lockfile or config is in no test file's dependencies, yet
-		// stales every record: a file this run left out keeps none.
-		const always = new Set(alwaysPaths(ctx))
-		// A record put together from several cache entries has lost what the change staled already.
-		const changed = pending.settled ? [] : pending.changed
-		const staleAll = changed.some((file) => always.has(file))
-		// The packages in `global` outlive it: with a warm transform cache this
-		// run did not load the transformer's packages, and a later one would.
-		const stored = loadRecords(readJson<StoredRecords | Records>(recordsFile(ctx, pending.shard)))
-		const merged = mergeRecords(
-			staleAll && stored
-				? {
-						...stored,
-						files: {},
-						global: (stored.global ?? []).filter(isPackagePath),
-					}
-				: stored,
-			run,
-			changed,
-			ctx.options,
-			pending.affects,
-		)
-		for (const spec of Object.keys(merged.files)) {
-			const file = path.join(ctx.repo, specPath(spec))
-			// Deleted, or recorded before a second project had the file.
-			if (
-				!existsSync(file) ||
-				(specProject(spec) === undefined && ctx.shared.has(file))
-			) {
-				delete merged.files[spec]
-			}
-		}
-		merged.global = merged.global.filter(
-			(file) => !isPackagePath(file) || existsSync(path.join(ctx.repo, file)),
-		)
-		if (ctx.narrow) {
-			updateUnits(
-				ctx,
-				pending.shard,
-				stored,
-				merged,
-				new Map([...this.results.keys()].map((file) => [file, ran.get(file)])),
-				this.partial,
-			)
-		} else dropUnits(ctx, pending.shard)
-		const anchored = await writeRecords(ctx, pending.shard, merged)
-		const entries = Object.values(merged.files)
-		const vouched = entries.filter(
-			(entry) =>
-				!entry.failed && !Object.values(entry.tests).includes('failed'),
-		).length
+		const { records, vouched, anchored } = await session.commit(pending, [run], {
+			entered,
+			// Recorded before a second project had the file.
+			keep: (spec) =>
+				spec !== specPath(spec) || !ctx.shared.has(path.join(ctx.repo, spec)),
+		})
 		log(
-			`record: ${vouched} of ${entries.length} test file(s) vouched for, ${anchored} path(s) anchored`,
+			`record: ${vouched} of ${Object.keys(records.files).length} test file(s) vouched for, ${anchored} path(s) anchored`,
 		)
-		await save(ctx, pending.shard)
 	}
 }
 

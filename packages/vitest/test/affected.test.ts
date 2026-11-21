@@ -29,9 +29,17 @@ import {
 } from 'vitest'
 import { version as vitestVersion } from 'vitest/node'
 
-import { SNAPSHOT_FILE, type Snapshot } from '../src/affected.ts'
-import { cacheKey, runtimeId } from '../src/cache.ts'
-import { anchorTree, blobsAt, diffTrees } from '../../shared/src/git.ts'
+import { runtimeId, type Anchor } from '../../core/src/anchor.ts'
+import {
+	loadRecords,
+	storeRecords,
+	specPath,
+	specProject,
+	vouched,
+	type Records,
+	type StoredRecords,
+} from '../../core/src/record.ts'
+import { anchorTree, blobsAt, diffTrees } from '../../core/src/git.ts'
 import { supportsVersion } from '../src/index.ts'
 import { OWN_RECORDS_FILE, recordsNatively } from '../src/records.ts'
 
@@ -140,39 +148,88 @@ class Repo {
 		writeFileSync(target, content)
 	}
 
-	/** The snapshot file for the full run, or the one whose name carries `key` for a `--project` run. */
-	private snapshotFile(key = ''): string | null {
+	/** The anchor file for the full run, or the one a `--project` run of the projects `key`, or the shard `key` (`1of2`), keeps. */
+	private anchorFile(key = ''): string | null {
 		const cacheDir = path.join(this.cwd, 'node_modules', '.vite', 'vitest')
 		if (!existsSync(cacheDir)) return null
+		const tag = /^\d+of\d+$/.test(key)
+			? `.${key}`
+			: key === ''
+				? ''
+				: `.${createHash('sha1').update(key).digest('hex').slice(0, 12)}`
 		const files = readdirSync(cacheDir, {
 			recursive: true,
 			encoding: 'utf8',
-		}).filter((file) =>
-			key === ''
-				? /^blacksmith(\.\d+of\d+)?\.json$/.test(path.basename(file))
-				: /^blacksmith(\.[0-9a-f]{12})?(\.\d+of\d+)?\.json$/.test(
-						path.basename(file),
-					) && readFileSync(path.join(cacheDir, file), 'utf8').includes(key),
+		}).filter(
+			(file) =>
+				path.basename(path.dirname(file)) === 'blacksmith' &&
+				path.basename(file) === `anchor${tag}.json`,
 		)
 		if (files.length !== 1) return null
 		return path.join(cacheDir, files[0] ?? '')
 	}
 
-	snapshot(key = ''): Snapshot | null {
-		const file = this.snapshotFile(key)
-		return file ? (JSON.parse(readFileSync(file, 'utf8')) as Snapshot) : null
+	/** The stored anchor: the tree the record was written against, and the run that wrote it. */
+	snapshot(key = ''): Anchor | null {
+		const file = this.anchorFile(key)
+		return file ? (JSON.parse(readFileSync(file, 'utf8')) as Anchor) : null
 	}
 
-	/** The test files the stored snapshot vouches for in any project, sorted. */
+	/** The stored record that goes with the anchor. */
+	records(key = ''): Records | null {
+		const file = this.anchorFile(key)
+		if (!file) return null
+		return loadRecords(
+			JSON.parse(
+				readFileSync(
+					path.join(path.dirname(file), path.basename(file).replace(/^anchor/, 'records')),
+					'utf8',
+				),
+			) as StoredRecords,
+		)
+	}
+
+	/** The test files the stored record vouches for in any project, sorted. */
 	vouched(key = ''): string[] | undefined {
-		const tests = this.snapshot(key)?.tests
-		return tests && [...new Set(Object.values(tests).flat())].sort()
+		const files = this.records(key)?.files
+		return (
+			files && [
+				...new Set(
+					Object.entries(files)
+						.filter(([, entry]) => vouched(entry))
+						.map(([spec]) => specPath(spec)),
+				),
+			].sort()
+		)
 	}
 
-	/** Overwrites fields of the stored snapshot, standing in for a snapshot another run produced. */
+	/** The projects the stored record has test files of, sorted. */
+	projects(key = ''): string[] {
+		return [
+			...new Set(
+				Object.keys(this.records(key)?.files ?? {}).map((spec) => specProject(spec) ?? ''),
+			),
+		].sort()
+	}
+
+	/** Takes a test file's record out of the stored record, as if no run had vouched for it. */
+	forget(test: string, key = ''): void {
+		const anchor = this.anchorFile(key)
+		const records = this.records(key)
+		if (!anchor || !records) throw new Error('no record to edit')
+		for (const spec of Object.keys(records.files)) {
+			if (specPath(spec) === test) delete records.files[spec]
+		}
+		writeFileSync(
+			path.join(path.dirname(anchor), path.basename(anchor).replace(/^anchor/, 'records')),
+			JSON.stringify(storeRecords(records)),
+		)
+	}
+
+	/** Overwrites fields of the stored anchor, standing in for one another run produced. */
 	patchSnapshot(patch: Record<string, unknown>, key = ''): void {
-		const file = this.snapshotFile(key)
-		if (!file) throw new Error('no snapshot to patch')
+		const file = this.anchorFile(key)
+		if (!file) throw new Error('no anchor to patch')
 		const stored = JSON.parse(readFileSync(file, 'utf8')) as Record<
 			string,
 			unknown
@@ -243,10 +300,7 @@ describe('--changed against the tree snapshot', () => {
 			`[blacksmith] filtered out 0 of ${TESTS.length} test files as unaffected, ran ${TESTS.length}`,
 		)
 		expect(repo.snapshot()).toMatchObject({
-			version: 11,
 			head: repo.git('rev-parse', 'HEAD').trim(),
-			root: '',
-			shard: null,
 			tree: { 'src/lib/a.ts': expect.any(String) },
 		})
 
@@ -348,7 +402,7 @@ describe('--changed against the tree snapshot', () => {
 			const mapped = await repo.run()
 			expect(mapped.exitCode, mapped.output).toBe(0)
 			expect(mapped.ran).toEqual(['mapped'])
-			expect(mapped.output).toContain('1 test files via dependencies')
+			expect(mapped.output).toContain('run  src/mapped.test.ts  (changed: mapped/data.txt)')
 			repo.commit('edit mapped data')
 			expect((await repo.run()).ran).toEqual([])
 		} finally {
@@ -587,8 +641,8 @@ describe('sharding', () => {
 		repo = new Repo('shard')
 	})
 
-	const SHARD_1_OF_2 = '"shard":{"index":1,"count":2}'
-	const SHARD_2_OF_2 = '"shard":{"index":2,"count":2}'
+	const SHARD_1_OF_2 = '1of2'
+	const SHARD_2_OF_2 = '2of2'
 	const owned = (index: number, count: number) =>
 		vitestShard(index, count, TESTS)
 
@@ -602,8 +656,8 @@ describe('sharding', () => {
 			`[blacksmith] filtered out 0 of ${mine} test files as unaffected, ran ${mine}`,
 		)
 		expect([...one.ran, ...two.ran].sort()).toEqual([...TESTS].sort())
-		expect(repo.snapshot(SHARD_1_OF_2)?.shard).toEqual({ index: 1, count: 2 })
-		expect(repo.snapshot(SHARD_2_OF_2)?.shard).toEqual({ index: 2, count: 2 })
+		expect(repo.snapshot(SHARD_1_OF_2)).not.toBeNull()
+		expect(repo.snapshot(SHARD_2_OF_2)).not.toBeNull()
 	})
 
 	test("each shard keeps its own snapshot; another shard's is never read", async () => {
@@ -615,16 +669,11 @@ describe('sharding', () => {
 		)
 		expect((await repo.run('--changed', '--shard=2/2')).ran).toEqual([])
 		const third = await repo.run('--changed', '--shard=1/3')
-		expect(third.output).toContain('no dependency snapshot')
+		expect(third.output).toContain('(no record)')
 		expect(third.ran).toEqual(owned(1, 3))
 		// An unsharded run beside them leaves the shards' snapshots alone.
 		expect((await repo.run()).exitCode).toBe(0)
 		expect((await repo.run('--changed', '--shard=1/2')).ran).toEqual([])
-		// A shard's snapshot stored under another shard's name is still refused.
-		repo.patchSnapshot({ shard: { index: 2, count: 2 } }, SHARD_1_OF_2)
-		const other = await repo.run('--changed', '--shard=1/2')
-		expect(other.ran).toEqual(owned(1, 2))
-		expect(other.output).toContain('snapshot is for shard 2/2')
 	})
 
 	test('a changed dependency only reruns dependents the shard owns', async () => {
@@ -644,19 +693,10 @@ describe('sharding', () => {
 				.sort(),
 		)
 		const [moved, ...rest] = owned(1, 2)
-		repo.patchSnapshot(
-			{
-				tests: Object.fromEntries(
-					Object.keys(repo.snapshot(SHARD_1_OF_2)?.tests ?? {}).map(
-						(project) => [project, rest.map((name) => `src/${name}.test.ts`)],
-					),
-				),
-			},
-			SHARD_1_OF_2,
-		)
+		repo.forget(`src/${moved}.test.ts`, SHARD_1_OF_2)
+		expect(rest.length).toBeGreaterThan(0)
 		const run = await repo.run('--changed', '--shard=1/2')
-		expect(run.output).toContain('0 files changed')
-		expect(run.output).toContain('1 test files not covered by it')
+		expect(run.output).toContain(`run  src/${moved}.test.ts  (no record)`)
 		expect(run.ran).toEqual([moved])
 		expect((await repo.run('--changed', '--shard=1/2')).ran).toEqual([])
 	})
@@ -668,29 +708,28 @@ describe('snapshot is only written by runs that cover the shard', () => {
 		repo = new Repo('partial')
 	})
 
-	test('name and file filters do not write it, a full run does', async () => {
+	test('a name filter vouches for nothing it did not run; a file filter records the files it ran', async () => {
 		await repo.run('-t', 'one')
-		expect(repo.snapshot()).toBeNull()
+		// Tests the pattern left out never ran: no file of the run is vouched for.
+		expect(repo.vouched()).toEqual([])
 		await repo.run('src/one.test.ts')
-		expect(repo.snapshot()).toBeNull()
+		expect(repo.vouched()).toEqual(['src/one.test.ts'])
 		await repo.run()
-		expect(repo.snapshot()).not.toBeNull()
+		expect(repo.vouched()?.length).toBe(TESTS.length)
 	})
 
-	test('a file filter combined with --changed does not advance it', async () => {
-		const before = repo.snapshot()
-		repo.write('src/lib/b.ts', "export const b = 'b' // filtered\n")
+	test('a file filter combined with --changed runs the affected files it names and leaves the rest for the next run', async () => {
+		// A statement, not a comment: narrowing sees through a change no function is part of.
+		repo.write('src/lib/b.ts', "export const b = 'b'\nvoid 0\n")
 		const unaffected = await repo.run('src/one.test.ts', '--changed')
 		expect(unaffected.exitCode, unaffected.output).toBe(0)
-		expect(unaffected.ran).toEqual([])
-		expect(repo.snapshot()).toEqual(before)
+		expect(unaffected.ran, unaffected.output).toEqual([])
 
 		const affected = await repo.run('src/two.test.ts', '--changed')
 		expect(affected.exitCode, affected.output).toBe(0)
 		expect(affected.ran).toEqual(['two'])
-		expect(repo.snapshot()).toEqual(before)
 
-		expect((await repo.run('--changed')).ran).toEqual(['three', 'two'])
+		expect((await repo.run('--changed')).ran).toEqual(['three'])
 	})
 
 	test('a failing run vouches for the files that passed; the failed ones rerun', async () => {
@@ -703,7 +742,7 @@ describe('snapshot is only written by runs that cover the shard', () => {
 		expect(failing.exitCode).toBe(1)
 		expect(failing.ran).toEqual(['one', 'two'])
 		expect(failing.output).toContain(
-			'2 failed test files left out of the dependency snapshot',
+			'2 failed test files run again next time',
 		)
 		const after = repo.snapshot()
 		expect(after?.tree['src/lib/a.ts']).not.toBe(before?.tree['src/lib/a.ts'])
@@ -731,13 +770,13 @@ describe('snapshot is only written by runs that cover the shard', () => {
 		const files = readdirSync(cacheDir, {
 			recursive: true,
 			encoding: 'utf8',
-		}).filter((file) => path.basename(file) === SNAPSHOT_FILE)
+		}).filter((file) => /blacksmith[\\/]anchor\.json$/.test(file))
 		const file = path.join(cacheDir, files[0] ?? '')
 		writeFileSync(file, readFileSync(file, 'utf8').slice(0, 40))
 		const truncated = await repo.run('--changed')
 		expect(truncated.exitCode, truncated.output).toBe(0)
 		expect(truncated.ran).toEqual([...TESTS].sort())
-		expect(truncated.output).toContain('no dependency snapshot')
+		expect(truncated.output).toContain('(no record)')
 
 		writeFileSync(file, JSON.stringify({ version: 3, head: 'x' }))
 		expect((await repo.run('--changed')).ran).toEqual([...TESTS].sort())
@@ -979,7 +1018,7 @@ test('mirror', () => expect(read.sort()).toEqual(['a\\n', 'b\\n']))
 		// A fresh checkout has no src/mirrored.
 		rmSync(path.join(repo.cwd, 'src/mirrored'), { recursive: true })
 		const fresh = await repo.run('--changed')
-		expect(fresh.output).toContain('[blacksmith] 0 files changed')
+		expect(fresh.output).toContain('[blacksmith] 0 of 16 test file(s) affected')
 		expect(fresh.ran).toEqual([])
 		repo.write('src/assets/deep/b.txt', 'changed\n')
 		expect((await repo.run('--changed')).ran).toEqual(['mirror'])
@@ -1238,17 +1277,17 @@ describe('--project narrows what a snapshot vouches for', () => {
 		const unit = await repo.run('--project', 'unit')
 		expect(unit.exitCode, unit.output).toBe(0)
 		expect(repo.snapshot()).toBeNull()
-		expect(repo.snapshot('"unit"')).toMatchObject({ projects: ['unit'] })
+		expect(repo.projects('unit')).toEqual(['unit'])
 
 		const second = await repo.run('--project', 'second', '--changed')
-		expect(second.output).toContain('no dependency snapshot')
+		expect(second.output).toContain('no record)')
 		expect(second.ran).toEqual(['shared'])
-		expect(repo.snapshot('"second"')).toMatchObject({ projects: ['second'] })
+		expect(repo.projects('second')).toEqual(['second'])
 
 		const all = await repo.run('--changed')
-		expect(all.output).toContain('no dependency snapshot')
+		expect(all.output).toContain('no record)')
 		expect(all.ran).toEqual(['shared', 'shared'])
-		expect(repo.snapshot()).toMatchObject({ projects: ['second', 'unit'] })
+		expect(repo.projects()).toEqual(['second', 'unit'])
 
 		expect((await repo.run('--project', 'unit', '--changed')).ran).toEqual([])
 		expect((await repo.run('--changed')).ran).toEqual([])
@@ -1441,7 +1480,7 @@ describe('the dependency record travels through the Actions cache', () => {
 		const first = await producer.run()
 		expect(first.exitCode, first.output).toBe(0)
 		expect(first.output).toContain(
-			`saved dependency cache blacksmith-vitest-v11-${runtimeId()}-all-shard0-`,
+			`saved dependency cache blacksmith-vitest-v7-${runtimeId()}-`,
 		)
 		expect([...cache.entries.values()].filter((e) => e.final)).toHaveLength(1)
 
@@ -1450,7 +1489,7 @@ describe('the dependency record travels through the Actions cache', () => {
 		const restored = await consumer.run('--changed')
 		expect(restored.exitCode, restored.output).toBe(0)
 		expect(restored.output).toContain(
-			`restored dependency cache blacksmith-vitest-v11-${runtimeId()}-all-shard0-`,
+			`restored dependency cache blacksmith-vitest-v7-${runtimeId()}-`,
 		)
 		expect(restored.ran).toEqual([])
 
@@ -1531,10 +1570,9 @@ describe('the dependency record travels through the Actions cache', () => {
 		expect(clean.ran).toEqual([...TESTS].sort())
 		expect(clean.output).toMatch(
 			new RegExp(
-				`shadow: would have run 0 of \\d+ test files \\(0 files changed since [0-9a-f]{12}, from blacksmith-vitest-v11-${runtimeId()}-all-shard0-`,
+				`shadow: would have run 0 of \\d+ test files \\(0 files changed\\)`,
 			),
 		)
-		expect(clean.output).not.toContain('restored dependency cache')
 		expect(clean.output).toContain('saved dependency cache')
 		expect(existsSync(path.join(repo.dir, 'node_modules/.vite/vitest'))).toBe(
 			true,
@@ -1556,7 +1594,7 @@ describe('the dependency record travels through the Actions cache', () => {
 		const triggered = await repo.run()
 		expect(triggered.exitCode, triggered.output).toBe(0)
 		expect(triggered.output).toMatch(
-			/shadow: would have run (\d+) of \1 test files \(everything: (a changed file matches forceRerunTriggers|a dependency of the config changed)/,
+			/shadow: would have run (\d+) of \1 test files \(everything: vitest\.config\.ts changed\)/,
 		)
 		repo.commit('config')
 
@@ -1576,7 +1614,7 @@ describe('the dependency record travels through the Actions cache', () => {
 		expect(run.exitCode, run.output).toBe(0)
 		expect(run.ran).toEqual([...TESTS].sort())
 		expect(run.output).toContain(
-			'shadow: nothing to compare against (no entry under',
+			'shadow: nothing to compare against (no record)',
 		)
 	})
 
@@ -1836,9 +1874,6 @@ describe('the dependency record travels through the Actions cache', () => {
 		expect(bare.ran).toEqual([])
 
 		const again = await repo.run('--changed')
-		expect(again.output).toContain(
-			'blacksmith.json already exists, not restoring',
-		)
 		expect(again.output).not.toContain('restored dependency cache')
 	})
 
@@ -1890,7 +1925,7 @@ describe('packages of one repository keep separate caches', () => {
 		const root = new Repo('cache-root')
 		root.env = { ACTIONS_RESULTS_URL: cache.url }
 		expect((await root.run()).exitCode).toBe(0)
-		expect(root.snapshot()?.root).toBe('')
+		expect(root.snapshot()).not.toBeNull()
 
 		const nested = new Repo('cache-nested', 'fixture-affected', 'packages/a')
 		nested.env = { ACTIONS_RESULTS_URL: cache.url }
@@ -1898,7 +1933,7 @@ describe('packages of one repository keep separate caches', () => {
 		expect(first.exitCode, first.output).toBe(0)
 		expect(first.output).not.toContain('restored dependency cache')
 		expect(first.ran).toEqual([...TESTS].sort())
-		expect(nested.snapshot()?.root).toBe('packages/a')
+		expect(nested.snapshot()).not.toBeNull()
 		const keys = [...cache.entries]
 			.filter(([, entry]) => entry.final)
 			.map(([key]) => key.replace(/-[0-9a-f]{40}$/, ''))
@@ -1911,17 +1946,6 @@ describe('packages of one repository keep separate caches', () => {
 		expect(restored.exitCode, restored.output).toBe(0)
 		expect(restored.output).toContain('restored dependency cache')
 		expect(restored.ran).toEqual([])
-	})
-
-	test("a snapshot written for another package's root runs everything", async () => {
-		const repo = new Repo('root-mismatch')
-		expect((await repo.run()).exitCode).toBe(0)
-		repo.patchSnapshot({ root: 'packages/b' })
-		const run = await repo.run('--changed')
-		expect(run.output).toContain(
-			'dependency snapshot is for packages/b, this run is for the repository root',
-		)
-		expect(run.ran).toEqual([...TESTS].sort())
 	})
 })
 
@@ -1954,7 +1978,7 @@ describe('identity: runtime, manifests and the workflow file', () => {
 		repo.patchSnapshot({ runtime: 'node0-plan9-mips' })
 		const other = await repo.run('--changed')
 		expect(other.ran).toEqual([...TESTS].sort())
-		expect(other.output).toContain('was made on node0-plan9-mips')
+		expect(other.output).toContain('on node0-plan9-mips, this is')
 	})
 
 	test('a changed package.json reruns every test with a recorded file below it', async () => {
@@ -1976,7 +2000,7 @@ describe('identity: runtime, manifests and the workflow file', () => {
 		)
 		const lib = await repo.run('--changed')
 		expect(lib.ran).toEqual(['one', 'three', 'two'])
-		expect(lib.output).toContain('3 test files under a changed manifest')
+		expect(lib.output).toContain('(changed: src/lib/tsconfig.json)')
 		repo.commit('loosen lib tsconfig')
 		expect((await repo.run('--changed')).ran).toEqual([])
 		// The root package.json sits above every recorded file.
@@ -2007,7 +2031,7 @@ describe('identity: runtime, manifests and the workflow file', () => {
 		repo.write('.github/workflows/ci.yml', 'on: push\nenv: { CI: 1 }\njobs: {}\n')
 		const run = await repo.run('--changed')
 		expect(run.ran).toEqual([...TESTS].sort())
-		expect(run.output).toContain('.github/workflows/ci.yml changed, running every test')
+		expect(run.output).toContain('(changed: .github/workflows/ci.yml)')
 	})
 })
 
@@ -2027,30 +2051,13 @@ describe('identity: the workflow file and job', () => {
 		const nightly = await repo.run('--changed')
 		expect(nightly.ran).toEqual([...TESTS].sort())
 		expect(nightly.output).toContain(
-			'dependency snapshot was made by .github/workflows/ci.yml#test',
+			'the dependency record was made by .github/workflows/ci.yml#test',
 		)
 		expect((await repo.run('--changed')).ran).toEqual([])
 		repo.env = workflow('nightly.yml', 'test-node-22')
 		expect((await repo.run('--changed')).ran).toEqual([...TESTS].sort())
 	})
 
-	test('each job restores only its own cache entries', () => {
-		const key = (job: string) =>
-			cacheKey({
-				snapshotVersion: 7,
-				runtime: runtimeId(),
-				root: '',
-				job,
-				projects: [],
-				shard: null,
-				head: 'f'.repeat(40),
-			})
-		const ci = key('.github/workflows/ci.yml#test')
-		const nightly = key('.github/workflows/nightly.yml#test')
-		expect(ci.key).not.toBe(nightly.key)
-		expect(nightly.key.startsWith(ci.prefix)).toBe(false)
-		expect(key('').prefix).toContain('-all-')
-	})
 })
 
 describe('vitest versions', () => {
@@ -2133,19 +2140,15 @@ describe('hygiene: lockfiles, dependency globs and record growth', () => {
 		const same = await repo.run('--changed', '--shard=1/2')
 		// Only src/generated/value.json can count: git-ignored, it has no blob at
 		// the snapshot's commit to compare with. Its test is shard 2's.
-		expect(same.output).toMatch(/\[blacksmith\] [01] files changed/)
+		expect(same.output).toContain('[blacksmith] 0 of 8 test file(s) affected')
 		expect(same.ran).toEqual([])
 		// A manifest that did not exist at the snapshot's commit is a change
 		// for every test with a recorded file below it.
 		repo.write('src/lib/package.json', '{ "type": "module" }\n')
 		expect((await repo.run()).exitCode).toBe(0)
 		const manifest = await repo.run('--changed', '--shard=1/2')
-		expect(manifest.output).toContain(
-			'1 files changed since',
-		)
-		// However many of the shard's test files loaded something below it.
-		expect(manifest.output).toMatch(/[1-9]\d* test files under a changed manifest/)
-		// Vitest's own resolver reruns the rest on a new package.json; ours selected one.test.ts.
+		// A new package.json also matches vitest's default forceRerunTriggers.
+		expect(manifest.output).toContain('(changed: src/lib/package.json)')
 		expect(manifest.ran).toContain('one')
 	})
 

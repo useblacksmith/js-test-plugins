@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module'
 
-import { ENV_REPO } from '../../shared/src/fs-recorder.ts'
-import { HITS } from '../../shared/src/hits.ts'
+import { ENV_REPO } from '../../core/src/fs-recorder.ts'
+import { HITS } from '../../core/src/hits.ts'
 import { markTransforms } from './mark.ts'
 import { begin, end } from './record.ts'
 import { ENV_NARROW, ENV_RUNTIME, projectName, resolveFromJest } from './state.ts'

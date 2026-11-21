@@ -21,13 +21,13 @@ import {
 	isIgnored,
 	workerRecordPath,
 	wrapFs,
-} from '../../shared/src/fs-recorder.ts'
-import { HITS, installHit, LOADED } from '../../shared/src/hits.ts'
+} from '../../core/src/fs-recorder.ts'
+import { HITS, installHit, LOADED } from '../../core/src/hits.ts'
 import {
 	isPackagePath,
 	packageDir,
 	packageOf,
-} from '../../shared/src/packages.ts'
+} from '../../core/src/packages.ts'
 
 /**
  * Runs as the first setup file of every test file. Vitest records what a
@@ -341,8 +341,8 @@ wrapFs(
 const recordChild = fileURLToPath(
 	new URL(
 		import.meta.url.endsWith('.ts')
-			? '../../shared/src/record-child.ts'
-			: '../../shared/src/record-child.js',
+			? '../../core/src/record-child.ts'
+			: '../../core/src/record-child.js',
 		import.meta.url,
 	),
 )

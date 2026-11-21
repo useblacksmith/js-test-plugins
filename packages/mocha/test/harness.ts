@@ -14,7 +14,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { closure, type RunRecord } from '../src/core.ts'
+import type { RunRecord } from '../../core/src/record.ts'
+import { closure } from '../../core/src/select.ts'
 
 export const packageRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -145,11 +146,11 @@ export class Repo {
 /** Every file the run recorded `spec` as depending on, the spec itself aside. */
 export function dependenciesOf(run: RunRecord, spec: string): string[] {
 	const entry = run.files[spec]
-	const files = closure(run.graph, [
+	const files = closure(run.graph ?? {}, [
 		spec,
 		...run.global,
-		...(entry?.hooks ?? []),
-		...Object.values(entry?.tests ?? {}).flatMap((test) => test.deps),
+		...(entry?.deps ?? []),
+		...Object.values(entry?.tests ?? {}).flatMap((test) => test.deps ?? []),
 	])
 	files.delete(spec)
 	return [...files].sort()

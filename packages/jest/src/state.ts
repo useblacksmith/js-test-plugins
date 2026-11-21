@@ -2,7 +2,15 @@ import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 
-import type { Affects, Decision, Options } from './core.ts'
+import { analyze } from '../../core/src/units.ts'
+import { Session, type Pending } from '../../core/src/engine.ts'
+import { resolveDigest } from '../../core/src/narrow.ts'
+import type { Options as CoreOptions } from '../../core/src/select.ts'
+import type { Shard } from '../../core/src/store.ts'
+import { sourceFile } from './mark.ts'
+
+/** What the plugin takes. */
+export type Options = Omit<CoreOptions, 'services'>
 
 /** Overrides where the record and anchor are kept. */
 export const ENV_DIR = 'BLACKSMITH_JEST_DIR'
@@ -16,33 +24,12 @@ export const ENV_RUNTIME = 'BLACKSMITH_JEST_RUNTIME'
 /** Set when the modules of the repository are to report the functions a test file enters. */
 export const ENV_NARROW = 'BLACKSMITH_JEST_NARROW'
 
-export interface Shard {
-	index: number
-	count: number
-}
-
-export const suffix = (shard: Shard | null): string =>
-	shard ? `.${shard.index}of${shard.count}` : ''
-
 /** Under `node_modules`, like other tools' caches: git ignores it and the recorder never records it. */
 export function dataDir(cwd: string): string {
 	return (
 		process.env[ENV_DIR] ??
 		path.join(cwd, 'node_modules', '.cache', 'blacksmith-jest')
 	)
-}
-
-/** What the sequencer decided, kept for the reporter that follows the run. */
-export interface Pending {
-	shard: Shard | null
-	/** Every test file Jest was about to run, repository-relative. */
-	owned: string[]
-	changed: string[]
-	selection: Record<string, Decision>
-	/** Whether a changed file a test file loaded changed anything for it; absent when changes are not looked into. */
-	affects?: Affects | undefined
-	/** The stored record was put together from several cache entries, each already rid of what `changed` staled for it. */
-	settled?: boolean
 }
 
 /** Shared by the config helper, the sequencer and the reporter, which Jest loads into its main process one by one. */
@@ -54,7 +41,10 @@ export interface State {
 	passWithNoTests: boolean
 	coverage: boolean
 	shard: Shard | null
+	/** What the sequencer decided, kept for the reporter that follows the run. */
 	pending: Pending | null
+	/** The selection the run goes through, made once the sequencer knows the run's projects. */
+	session: Session | null
 	/** Whether the run looks into changed files. */
 	narrow: boolean
 	/** Resolves a specifier from a file the way one of the run's projects does. */
@@ -116,11 +106,56 @@ export function state(): State {
 		coverage: false,
 		shard: null,
 		pending: null,
+		session: null,
 		narrow: false,
 		resolve: () => null,
 		oneResolver: true,
 		shared: new Set(),
 	})
+}
+
+/** Files of Jest and its transformers that shape every test without any of them reading it. */
+const ALWAYS = [
+	'.swcrc',
+	'.babelrc',
+	'.babelrc.json',
+	...['js', 'cjs', 'mjs', 'ts', 'cts', 'mts', 'json'].flatMap((extension) => [
+		`jest.config.${extension}`,
+		`babel.config.${extension}`,
+	]),
+]
+
+/** The selection for this run: the shared core, told where Jest runs and how its projects resolve modules. */
+export function openSession(ctx: State): Session {
+	const { repo } = ctx
+	return (ctx.session = new Session({
+		name: 'jest',
+		repo,
+		cwd: ctx.cwd,
+		dir: dataDir(ctx.cwd),
+		options: ctx.options,
+		always: ALWAYS,
+		// Projects may map one specifier to different files, and the function record keeps one target.
+		digester:
+			ctx.narrow && ctx.oneResolver
+				? {
+						digest(module, code) {
+							const absolute = path.join(repo, module)
+							// A CommonJS module too: what it loads says which changes can reach a test through it.
+							const analysis = analyze(code, absolute, undefined, true)
+							if (!analysis) return null
+							const specifiers: Record<string, string> = {}
+							for (const specifier of new Set(analysis.digest.sources)) {
+								const target = ctx.resolve(absolute, specifier)
+								const inRepo = target === null ? null : sourceFile(repo, target)
+								if (inRepo !== null) specifiers[specifier] = inRepo
+							}
+							return resolveDigest(analysis.digest, specifiers)
+						},
+					}
+				: undefined,
+		log,
+	}))
 }
 
 export function log(message: string): void {

@@ -5,7 +5,7 @@ import { createServer, type Server } from 'node:http'
 import path from 'node:path'
 import { after, before, beforeEach, describe, test } from 'node:test'
 
-import { shardFor } from '../../shared/src/shard.ts'
+import { shardFor } from '../../core/src/shard.ts'
 import { Repo, mocharc } from './harness.ts'
 
 const SPECS = ['a', 'b', 'c', 'd', 'e', 'f']

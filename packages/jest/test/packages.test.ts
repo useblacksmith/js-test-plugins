@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 
-import { PackageLinks, packageVersion } from '../../shared/src/packages.ts'
+import { PackageLinks, packageVersion } from '../../core/src/packages.ts'
 
 /** A pnpm layout: every version of `pkg` in a store entry of its own. */
 function store(): { repo: string; link: (from: string, version: string) => void } {

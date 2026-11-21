@@ -1,4 +1,4 @@
-import type { RunRecord, SpecRecord } from './core.ts'
+import type { RunFile, RunRecord } from '../../core/src/record.ts'
 
 /** What one process of a run (Mocha's main process, or a `--parallel` worker) recorded, written once per `Runner`. */
 export interface Piece {
@@ -8,7 +8,7 @@ export interface Piece {
 	entries: string[]
 	/** Files read with no repository module on the stack and no test running. */
 	unattributed: string[]
-	files: Record<string, SpecRecord>
+	files: Record<string, RunFile>
 	/** Reads of a test of an earlier spec file that arrived after its `Runner` ended. */
 	late: Record<string, Record<string, string[]>>
 }
@@ -18,7 +18,7 @@ export function unionPieces(pieces: Piece[]): RunRecord {
 	const graph: Record<string, string[]> = {}
 	const entries = new Set<string>()
 	const unattributed = new Set<string>()
-	const files: Record<string, SpecRecord> = {}
+	const files: Record<string, RunFile> = {}
 	for (const piece of pieces) {
 		for (const [from, to] of Object.entries(piece.graph)) {
 			graph[from] = [...new Set([...(graph[from] ?? []), ...to])].sort()
@@ -31,7 +31,7 @@ export function unionPieces(pieces: Piece[]): RunRecord {
 		for (const [spec, tests] of Object.entries(piece.late)) {
 			for (const [title, deps] of Object.entries(tests)) {
 				const test = files[spec]?.tests[title]
-				if (test) test.deps = [...new Set([...test.deps, ...deps])].sort()
+				if (test) test.deps = [...new Set([...(test.deps ?? []), ...deps])].sort()
 			}
 		}
 	}

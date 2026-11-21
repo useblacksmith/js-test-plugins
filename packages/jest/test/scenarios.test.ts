@@ -1,9 +1,9 @@
 import path from 'node:path'
 import { test } from 'node:test'
 
-import type { Driver } from '../../shared/test/project.ts'
-import { installCases } from '../../shared/test/install.ts'
-import { cases } from '../../shared/test/scenarios.ts'
+import type { Driver } from '../../core/test/project.ts'
+import { installCases } from '../../core/test/install.ts'
+import { cases } from '../../core/test/scenarios.ts'
 import { packageRoot } from './harness.ts'
 
 const driver: Driver = {

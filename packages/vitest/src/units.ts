@@ -1,35 +1,11 @@
-import { existsSync, statSync } from 'node:fs'
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { statSync } from 'node:fs'
+import { readdir, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
 import MagicString from 'magic-string'
-import type { Vitest } from 'vitest/node'
-import { UNITS_SUFFIX } from '../../shared/src/fs-recorder.ts'
-import {
-	Narrowing,
-	resolveDigest,
-	type RecordedTest,
-	type ResolvedDigest,
-} from '../../shared/src/narrow.ts'
-import { analyze, globalFooter } from '../../shared/src/units.ts'
-
-export const UNITS_FILE = 'blacksmith-units.json'
-
-/** The function record kept for one anchor: digests are only as current as the anchor they are compared under. */
-export function unitsFile(snapshotFile: string): string {
-	return path.join(
-		path.dirname(snapshotFile),
-		path.basename(snapshotFile).replace(/^blacksmith/, 'blacksmith-units'),
-	)
-}
-const UNITS_VERSION = 2
-
-export interface UnitRecords {
-	version: typeof UNITS_VERSION
-	/** Repo-relative module → its digest when a test last ran it. */
-	modules: Record<string, ResolvedDigest>
-	/** Repo-relative test file → module → the functions the test entered in it. */
-	tests: Record<string, Record<string, string[]>>
-}
+import { UNITS_SUFFIX } from '../../core/src/fs-recorder.ts'
+import { resolveDigest, type ResolvedDigest } from '../../core/src/narrow.ts'
+import type { Digester } from '../../core/src/unitstore.ts'
+import { analyze, globalFooter } from '../../core/src/units.ts'
 
 // On the process: a project with its own root evaluates the config, and so
 // the plugin, a second time.
@@ -124,132 +100,49 @@ function resolveRelative(repo: string, importer: string, specifier: string): str
 }
 
 /**
- * Vite does not transform a module it holds a cached result for, so a file
- * put back to an earlier content keeps the digest of the content between.
- * Brings every digest this run did not produce in line with the file: its
- * old specifiers still hold when it imports the same modules, and without
- * that the module is forgotten, so its changes rerun every test that loaded it.
+ * How the function record takes a module's digest. One this run transformed
+ * has the digest `instrument` took, with Vite's own resolution. Vite does
+ * not transform a module it holds a cached result for, and a selection runs
+ * before any transform: there the specifiers the recorded digest resolved
+ * still hold, and a new relative one is found on disk. A module that imports
+ * something neither can place is forgotten, so its changes rerun every test
+ * that loaded it.
  */
-async function refreshDigests(repo: string, records: UnitRecords): Promise<void> {
-	await Promise.all(
-		Object.entries(records.modules).map(async ([module, stored]) => {
-			if (digests.has(module)) return
-			let code: string
-			try {
-				code = await readFile(path.join(repo, module), 'utf8')
-			} catch {
-				return
+export function digester(repo: string): Digester {
+	return {
+		fresh: (module) => digests.has(module),
+		digest(module, code, before, when) {
+			const taken = when === 'commit' ? digests.get(module) : undefined
+			if (taken) return taken
+			if (!before) return null
+			const file = path.join(repo, module)
+			const analysis = analyze(code, file)
+			if (!analysis) return null
+			const specifiers = { ...before.specifiers }
+			for (const specifier of analysis.digest.sources) {
+				if (specifier in specifiers || !specifier.startsWith('.')) continue
+				const target = resolveRelative(repo, file, specifier)
+				if (target !== null) specifiers[specifier] = target
 			}
-			const analysis = analyze(code, path.join(repo, module))
-			if (!analysis) {
-				delete records.modules[module]
-				return
-			}
-			const current = resolveDigest(analysis.digest, stored.specifiers)
-			// A digest taken before one held as much as it does now is taken again.
-			const complete = Object.keys(current).every((key) => Object.hasOwn(stored, key))
-			if (complete && JSON.stringify(current) === JSON.stringify({ ...current, ...stored })) return
+			// A selection counts a specifier it cannot place as a module no test has loaded; a record does not keep one.
 			const known = analysis.digest.sources.every(
 				(source) =>
-					Object.hasOwn(stored.specifiers, source) || stored.sources.includes(`?${source}`),
+					Object.hasOwn(specifiers, source) || before.sources.includes(`?${source}`),
 			)
-			if (known) records.modules[module] = current
-			else delete records.modules[module]
-		}),
-	)
-}
-
-/** The layout before this one: `tests` named each module and its functions under every test file. */
-type LegacyUnits = Omit<UnitRecords, 'version'> & { version: 1 }
-
-/**
- * The record as the file holds it. Most test files enter the same functions
- * of the same modules, so `hits` holds each module with a list of functions
- * once, as a position in `paths` followed by the names, and a test file is a
- * list of positions in `hits`.
- */
-interface StoredUnits extends Omit<UnitRecords, 'tests'> {
-	paths: string[]
-	hits: [number, ...string[]][]
-	tests: Record<string, number[]>
-}
-
-export function storeUnits(records: UnitRecords): StoredUnits {
-	const paths: string[] = []
-	const pathAt = new Map<string, number>()
-	const hits: StoredUnits['hits'] = []
-	const hitAt = new Map<string, number>()
-	const tests: StoredUnits['tests'] = {}
-	for (const [test, modules] of Object.entries(records.tests)) {
-		tests[test] = Object.entries(modules).map(([module, entered]) => {
-			const key = JSON.stringify([module, entered])
-			let hit = hitAt.get(key)
-			if (hit === undefined) {
-				let at = pathAt.get(module)
-				if (at === undefined) {
-					at = paths.length
-					pathAt.set(module, at)
-					paths.push(module)
-				}
-				hit = hits.length
-				hitAt.set(key, hit)
-				hits.push([at, ...entered])
-			}
-			return hit
-		})
-	}
-	return { ...records, paths, hits, tests }
-}
-
-export function loadUnits(stored: StoredUnits | LegacyUnits | null): UnitRecords | null {
-	if (stored === null || typeof stored !== 'object') return null
-	if (stored.version === 1 && !('hits' in stored)) return { ...stored, version: UNITS_VERSION }
-	if (stored.version !== UNITS_VERSION || !('hits' in stored)) return null
-	const { paths, hits, tests: positions, ...rest } = stored
-	const tests: UnitRecords['tests'] = {}
-	for (const [test, list] of Object.entries(positions)) {
-		const modules: Record<string, string[]> = {}
-		for (const position of list) {
-			const hit = hits[position]
-			const module = hit === undefined ? undefined : paths[hit[0]]
-			if (hit === undefined || typeof module !== 'string') return null
-			modules[module] = hit.slice(1) as string[]
-		}
-		tests[test] = modules
-	}
-	return { ...rest, tests }
-}
-
-export async function readUnits(file: string): Promise<UnitRecords | null> {
-	try {
-		return loadUnits(
-			JSON.parse(await readFile(file, 'utf8')) as StoredUnits | LegacyUnits,
-		)
-	} catch {
-		return null
+			return when === 'commit' && !known ? null : resolveDigest(analysis.digest, specifiers)
+		},
 	}
 }
 
 /**
- * Folds what the workers left under `recordRoot` into the record at `units`.
- * A `partial` run entered only what some of a file's tests enter, so what the
- * others entered before stays; a file without an earlier record gets none,
- * and reruns on any change to what it loaded.
+ * What the workers left under `recordRoot`: repository-relative test file →
+ * module → the functions the test file entered in it. A test file several
+ * projects run entered what any of them did.
  */
-export async function updateUnits(
-	vitest: Vitest,
+export async function collectEntered(
 	repo: string,
-	units: string,
 	recordRoot: string | undefined,
-	partial: boolean,
-	/** Test files (repo-relative) the shard runs in some of their projects only: what they entered in the others stays, like a partial run's. */
-	split: ReadonlySet<string> = new Set(),
-): Promise<void> {
-	const records = (await readUnits(units)) ?? {
-		version: UNITS_VERSION,
-		modules: {},
-		tests: {},
-	}
+): Promise<Map<string, Record<string, string[]>>> {
 	const pieces = recordRoot ? path.join(recordRoot, 'deps') : null
 	let names: string[] = []
 	try {
@@ -266,7 +159,6 @@ export async function updateUnits(
 			}
 			const test = relative(repo, piece.test)
 			if (test !== null) {
-				// A test file several projects run entered what any of them did.
 				let ran = fresh.get(test)
 				if (!ran) fresh.set(test, (ran = {}))
 				for (const [module, entered] of Object.entries(piece.files)) {
@@ -277,101 +169,12 @@ export async function updateUnits(
 		} catch {}
 		await rm(file, { force: true })
 	}
-	for (const [test, ran] of fresh) {
-		const previous = records.tests[test]
-		if (partial || split.has(test)) {
-			if (!previous) continue
-			for (const [module, entered] of Object.entries(previous)) {
-				const all = (ran[module] ??= new Set())
-				for (const unit of entered) all.add(unit)
-			}
-		}
-		records.tests[test] = Object.fromEntries(
-			Object.entries(ran).map(([module, entered]) => [module, [...entered].sort()]),
-		)
-	}
-	for (const test of Object.keys(records.tests)) {
-		if (!existsSync(path.join(repo, test))) delete records.tests[test]
-	}
-	for (const module of Object.keys(records.modules)) {
-		if (!existsSync(path.join(repo, module))) delete records.modules[module]
-	}
-	await writeUnits(units, records)
-}
-
-export async function writeUnits(file: string, records: UnitRecords): Promise<void> {
-	await mkdir(path.dirname(file), { recursive: true })
-	const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-	await writeFile(tmp, JSON.stringify(storeUnits(records)))
-	await rename(tmp, file)
-}
-
-/**
- * For the `changed` files, a predicate telling whether a recorded test has
- * to rerun for the ones it loaded; `null` without a record to narrow with.
- */
-export async function narrowing(
-	repo: string,
-	units: string,
-	changed: Iterable<string>,
-): Promise<((test: string, deps: ReadonlySet<string>, changed: readonly string[]) => boolean) | null> {
-	const records = await readUnits(units)
-	if (!records) return null
-	const current = new Map<string, ResolvedDigest | null>()
-	for (const file of changed) {
-		const module = relative(repo, file)
-		if (module === null) continue
-		const before = records.modules[module]
-		let after: ResolvedDigest | null = null
-		if (before) {
-			try {
-				const analysis = analyze(await readFile(file, 'utf8'), file)
-				// A specifier the module did not have before resolves to nothing
-				// known, and counts as a module no test has loaded.
-				if (analysis) {
-					const specifiers = { ...before.specifiers }
-					for (const specifier of analysis.digest.sources) {
-						if (specifier in specifiers || !specifier.startsWith('.')) continue
-						const target = resolveRelative(repo, file, specifier)
-						if (target !== null) specifiers[specifier] = target
-					}
-					after = resolveDigest(analysis.digest, specifiers)
-				}
-			} catch {}
-		}
-		current.set(module, after)
-	}
-	const narrowing = new Narrowing(records.modules, current)
-	const relativeDeps = new Map<ReadonlySet<string>, RecordedTest['deps']>()
-	return (test, deps, changedDeps) => {
-		const name = relative(repo, test)
-		if (name === null) return true
-		let inRepo = relativeDeps.get(deps)
-		if (!inRepo) {
-			const set = new Set<string>()
-			for (const dep of deps) {
-				const module = relative(repo, dep)
-				if (module !== null) set.add(module)
-			}
-			relativeDeps.set(deps, (inRepo = set))
-		}
-		const recorded: RecordedTest = { deps: inRepo, ran: records.tests[name] }
-		return changedDeps.some((dep) => {
-			const module = relative(repo, dep)
-			return module === null || narrowing.affects(module, recorded)
-		})
-	}
-}
-
-/**
- * Moves the recorded digests on to the files as they are now. Only a run
- * that writes its anchor does: the anchor is what says a file changed, and a
- * digest ahead of it would hide the change from the tests the run left out.
- */
-export async function advanceDigests(repo: string, file: string): Promise<void> {
-	const records = await readUnits(file)
-	if (!records) return
-	for (const [module, digest] of digests) records.modules[module] = digest
-	await refreshDigests(repo, records)
-	await writeUnits(file, records)
+	return new Map(
+		[...fresh].map(([test, ran]) => [
+			test,
+			Object.fromEntries(
+				Object.entries(ran).map(([module, entered]) => [module, [...entered].sort()]),
+			),
+		]),
+	)
 }

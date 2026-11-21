@@ -139,7 +139,7 @@ describe('failures and partial runs', () => {
 		assert.equal(partial.status, 0, partial.output)
 		assert.deepEqual(Repo.ran(partial), ['c'])
 		assert.deepEqual(repo.records().files['test/c.test.js']?.tests, {
-			'c one': 'passed',
+			'c one': { state: 'passed' },
 		})
 		assert.deepEqual(Repo.ran(repo.jest()), ['c'])
 		assert.deepEqual(Repo.ran(repo.jest()), [])
