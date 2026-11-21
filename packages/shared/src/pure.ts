@@ -75,7 +75,7 @@ export interface Module {
 	/** The `const`s of the top level that are still as written. */
 	root: Scope
 	/** Whether the module may reach what holds the language's own methods, and so replace one. */
-	patched: boolean
+	readonly patched: boolean
 	/** What is left to look at before giving up. */
 	budget: { left: number }
 }
@@ -190,6 +190,17 @@ export function value(node: Node | null | undefined, scope: Scope, mod: Module):
 	return mod.patched ? undefined : evaluate(node, scope, { mod, stack: new Set() })
 }
 
+/** What holds the methods of each kind. */
+const MAKERS: Record<NonNullable<Kind>, string> = {
+	string: 'String',
+	number: 'Number',
+	boolean: 'Boolean',
+	array: 'Array',
+	object: 'Object',
+	set: 'Set',
+	map: 'Map',
+}
+
 /** Whether `name` is the language's where it is read. */
 function native(name: string, scope: Scope, run: Run): boolean {
 	return !scope.holder(name) && !run.mod.own(name) && !run.mod.taken(name)
@@ -224,6 +235,8 @@ function evaluate(node: Node | null | undefined, scope: Scope, run: Run): Val | 
 			return node.name === 'undefined' ? ANY : node.name === 'NaN' || node.name === 'Infinity' ? NUMBER : undefined
 		}
 		case 'ArrayExpression': {
+			// What the language does with it by itself (spreading, joining) runs the methods of `Array`.
+			if (!native('Array', scope, run)) return undefined
 			const vals: Val[] = []
 			for (const item of node.elements as Array<Node | null>) {
 				if (!item) return undefined
@@ -237,6 +250,7 @@ function evaluate(node: Node | null | undefined, scope: Scope, run: Run): Val | 
 			return of ? { kind: 'array', of } : { kind: 'array' }
 		}
 		case 'ObjectExpression': {
+			if (!native('Object', scope, run)) return undefined
 			const fields = new Map<string, Val>()
 			let open = false
 			for (const property of node.properties as Node[]) {
@@ -356,13 +370,15 @@ function called(node: Node, scope: Scope, run: Run): Val | undefined {
 	}
 	const self = evaluate(object, scope, run)
 	// Adding to an array the function made itself changes nothing that was there before it ran.
-	if (name === 'push' && self?.own && object?.type === 'Identifier') {
+	if (name === 'push' && self?.own && object?.type === 'Identifier' && native('Array', scope, run)) {
 		const vals = values()
 		// Not what holds the array: it would then hold itself.
 		return vals && !vals.some(growing) ? NUMBER : undefined
 	}
 	const methods = self?.kind ? METHODS[self.kind] : undefined
 	if (!self || !methods || !Object.hasOwn(methods, name)) return undefined
+	// A method the module may have replaced is not the language's.
+	if (!native(MAKERS[self.kind!], scope, run)) return undefined
 	const spec = methods[name]!
 	if (args.length < spec.min || args.length > spec.args.length) return undefined
 	let result: Val | undefined
