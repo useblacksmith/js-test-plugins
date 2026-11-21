@@ -21,7 +21,7 @@ import { dataDir, suffix, type Resolve, type Shard, type State } from './state.t
  */
 const UNITS_VERSION = 2
 /** What a digest holds. A record written with less in each is still read, and its digests are taken again. */
-const DIGESTS = 4
+const DIGESTS = 3
 const CODE = /\.[cm]?[jt]sx?$/
 
 interface Units {

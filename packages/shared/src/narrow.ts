@@ -122,6 +122,13 @@ export function difference(before: ResolvedDigest, after: ResolvedDigest): Chang
 			else (old.kind === 'f' ? functions : locals).add(name)
 		}
 	}
+	// A value of other text that may do more than make the value did so for every
+	// test that loaded the module. One built from a changed value runs what it ran before.
+	for (const digest of [before, after]) {
+		for (const name of [...locals, ...partial.keys()]) {
+			if (Object.hasOwn(digest.units, name) && digest.units[name]!.effects) return 'all'
+		}
+	}
 	// What reads a changed name: all of it, or one of the keys that changed.
 	const reads = (refs: readonly string[], read: Readonly<Record<string, string[]>> | undefined) =>
 		refs.some((ref) => {
@@ -148,11 +155,6 @@ export function difference(before: ResolvedDigest, after: ResolvedDigest): Chang
 	}
 	for (const digest of [before, after]) {
 		if (reads(digest.restRefs, digest.restReads)) return 'all'
-		// A changed value, or one built from it, that may do more than make the
-		// value did so for every test that loaded the module.
-		for (const name of [...locals, ...partial.keys()]) {
-			if (Object.hasOwn(digest.units, name) && digest.units[name]!.effects) return 'all'
-		}
 	}
 	const values = new Set<string>()
 	const keys = new Map<string, ReadonlySet<string>>()
