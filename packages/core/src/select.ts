@@ -257,7 +257,11 @@ export function select(
 			else if (test.deps && test.deps.length > 0) {
 				const read = reach(test.deps)
 				const dep =
-					changed.find((file) => read.has(file)) ??
+					changed.find(
+						(file) =>
+							read.has(file) &&
+							(file === own || !policy.affects || policy.affects(spec, file)),
+					) ??
 					manifests.find(({ dir }) => [...read].some((file) => under(file, dir)))?.file
 				if (dep !== undefined) tests.push({ title, reason: `changed: ${dep}`, stale: true })
 			}

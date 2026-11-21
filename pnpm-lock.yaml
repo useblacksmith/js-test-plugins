@@ -53,6 +53,9 @@ importers:
 
   packages/mocha:
     dependencies:
+      oxc-parser:
+        specifier: 0.159.0
+        version: 0.159.0
       picomatch:
         specifier: 4.0.7
         version: 4.0.7

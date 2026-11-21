@@ -60,6 +60,37 @@ the test files that loaded a file under that directory.
 Changes to anything else in `package.json`, to `tsconfig.json`, `.mocharc.*`
 or the workflow file run everything.
 
+## Narrowing
+
+A change to an ES module does not rerun every spec file that loaded it. The
+recorder notes, for each spec file, which top-level functions its tests and
+hooks entered in every module it loaded, and a change to the body of a
+function reruns the spec files that entered it. What else in a file counts as
+changed for whom is as in
+[the Jest plugin](../jest/README.md#narrowing).
+
+Spec files share one module cache, so a function a module calls while it
+loads counts as entered by every spec file that loads the module, and so does
+one entered outside any test or hook of a spec file (a root hook).
+
+Any change reruns every spec file that loaded the file when the file is:
+
+- a CommonJS module (`require`, `module.exports`), or anything the Jest
+  plugin's list names;
+- compiled by a loader that reads the source itself. TypeScript loaded with
+  `--require ts-node/register` is narrowed; with `--require tsx/cjs` it is
+  not. Other loaders are untested: one that hands the recorder a source
+  other than the file's is left alone.
+
+Narrowing needs `module.registerHooks` (Node 22.15) and is off under
+coverage (`NODE_V8_COVERAGE`, as c8 sets, or nyc), where the added calls
+would be counted; `BLACKSMITH_MOCHA_NARROW=0` turns it off too.
+
+To record function entries the recorder adds one call at the start of each
+top-level function and of the module, before any other loader compiles it.
+Line numbers stay as they are; columns on the first line of a function and
+of the file move right.
+
 ## Commands
 
 | Command | |

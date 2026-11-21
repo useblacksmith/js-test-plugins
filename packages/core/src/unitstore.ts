@@ -5,7 +5,7 @@ import path from 'node:path'
 import { Narrowing, type ResolvedDigest } from './narrow.ts'
 import { isPackagePath } from './packages.ts'
 import { specPath, type Records } from './record.ts'
-import type { Affects } from './select.ts'
+import { closure, type Affects } from './select.ts'
 import { readJson, writeJson } from './store.ts'
 
 /**
@@ -123,6 +123,17 @@ export function loadUnits(stored: StoredUnits | LegacyUnits | null): Units | nul
 	}
 }
 
+/** Everything the record says a test file loaded: its own dependencies, its tests', and what those import. */
+function loadedBy(records: Records, spec: string): Set<string> {
+	const entry = records.files[spec]
+	const roots = [specPath(spec)]
+	if (entry) {
+		roots.push(...entry.deps)
+		for (const test of Object.values(entry.tests)) if (test.deps) roots.push(...test.deps)
+	}
+	return closure(records.graph, roots)
+}
+
 /**
  * For the `changed` files, whether a test file that loaded one has to rerun
  * for it; `undefined` without a function record that belongs to `records`.
@@ -160,7 +171,7 @@ export function affecting(
 		const entry = records.files[spec]
 		if (!entry) return true
 		let deps = loaded.get(spec)
-		if (!deps) loaded.set(spec, (deps = new Set([specPath(spec), ...entry.deps])))
+		if (!deps) loaded.set(spec, (deps = loadedBy(records, spec)))
 		return narrowing.affects(module, { deps, ran: units.tests[spec] })
 	}
 }
@@ -213,9 +224,9 @@ export function updateUnits(
 		} else units.tests[spec] = entered
 	}
 	const modules = new Set<string>()
-	for (const [spec, entry] of Object.entries(records.files)) {
+	for (const spec of Object.keys(records.files)) {
 		modules.add(specPath(spec))
-		for (const dep of entry.deps) {
+		for (const dep of loadedBy(records, spec)) {
 			if (CODE.test(dep) && !isPackagePath(dep)) modules.add(dep)
 		}
 	}

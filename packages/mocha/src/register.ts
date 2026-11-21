@@ -22,7 +22,10 @@ import {
 	isIgnored,
 	wrapFs,
 } from '../../core/src/fs-recorder.ts'
+import { HIT, LOADED } from '../../core/src/hits.ts'
 import type { RunFile } from '../../core/src/record.ts'
+import { closure } from '../../core/src/select.ts'
+import { STARTED, mark, narrows, sourceFile } from './narrow.ts'
 import { ENV_COMMIT, ENV_RUN, dataDir } from './paths.ts'
 import { unionPieces, type Piece } from './pieces.ts'
 
@@ -727,6 +730,82 @@ function install(): void {
 		if (id.endsWith(mochaEntry)) patchMocha(module?.exports as MochaExports)
 	}
 
+	// ---- functions entered -------------------------------------------------
+	// Every spec file shares one module cache, so what a spec file entered is
+	// what was entered while its tests and hooks ran. What a module's load
+	// enters is entered once, for every spec file that loads it later too.
+	const narrowing = narrows() && typeof Module.registerHooks === 'function'
+	/** Modules whose marks ran to their end: only of these is it known what was entered. */
+	const marked = new Set<string>()
+	const enteredByAll = new Map<string, Set<string>>()
+	const enteredBy = new Map<string, Map<string, Set<string>>>()
+	if (narrowing) {
+		let evaluating = 0
+		const names = (table: Map<string, Set<string>>, key: string): Set<string> => {
+			let set = table.get(key)
+			if (!set) table.set(key, (set = new Set()))
+			return set
+		}
+		;(globalThis as unknown as Record<string, unknown>)[HIT] = (key: string, name: string): void => {
+			if (name === STARTED) {
+				evaluating++
+				return
+			}
+			if (name === LOADED) {
+				// A module that threw before here leaves the count up: nothing is charged to one spec file after that.
+				if (evaluating > 0) evaluating--
+				marked.add(key)
+				return
+			}
+			const store = evaluating > 0 || loadStack.length > 0 ? undefined : running.getStore()
+			if (store?.type !== 'test' && store?.type !== 'hook') {
+				names(enteredByAll, key).add(name)
+				return
+			}
+			const spec = rel(store.file)
+			let table = enteredBy.get(spec)
+			if (!table) enteredBy.set(spec, (table = new Map()))
+			names(table, key).add(name)
+		}
+		Module.registerHooks({
+			load(url, context, next) {
+				const result = next(url, context)
+				try {
+					if (!url.startsWith('file:') || result.source == null) return result
+					const filename = fileURLToPath(url)
+					const key = ignored(filename) ? null : sourceFile(repo, filename)
+					if (key === null) return result
+					const source =
+						typeof result.source === 'string'
+							? result.source
+							: Buffer.from(result.source as Uint8Array).toString('utf8')
+					// Only the file as it is on disk: the digest it is compared with is of that.
+					if (source !== raw.readFileSync(filename, 'utf8')) return result
+					const code = mark(source, filename, key)
+					return code === null ? result : { ...result, source: code }
+				} catch {
+					return result
+				}
+			},
+		})
+	}
+
+	/** Module → functions for `spec`, of the marked modules it loaded or entered. */
+	function ranBy(spec: string, edges: Record<string, string[]>): Record<string, string[]> {
+		const entry = files.get(spec)
+		const own = enteredBy.get(spec)
+		const roots = [spec, ...(entry?.hooks ?? [])]
+		for (const test of entry?.tests.values() ?? []) roots.push(...test.deps)
+		const ran: Record<string, string[]> = {}
+		for (const module of new Set([...closure(edges, roots), ...(own?.keys() ?? [])])) {
+			if (!marked.has(module)) continue
+			ran[module] = [
+				...new Set([...(enteredByAll.get(module) ?? []), ...(own?.get(module) ?? [])]),
+			].sort()
+		}
+		return ran
+	}
+
 	// ---- the run's record ---------------------------------------------------
 	let sequence = 0
 	/** Writes one piece per `Runner`: a `--parallel` worker makes a `Runner` per spec file. */
@@ -741,6 +820,7 @@ function install(): void {
 			unattributed: [...unattributed],
 			files: {},
 			late: {},
+			...(narrowing ? { ran: {}, lateRan: {} } : {}),
 		}
 		for (const spec of specs) {
 			const entry = files.get(spec)
@@ -753,6 +833,10 @@ function install(): void {
 					deps: [...test.deps].sort(),
 					endpoints: [...test.endpoints].sort(),
 				}
+			}
+			if (piece.ran) {
+				piece.ran[spec] = ranBy(spec, piece.graph)
+				enteredBy.delete(spec)
 			}
 			piece.files[spec] = {
 				all: [...new Set(entry.all)],
@@ -775,6 +859,15 @@ function install(): void {
 				}
 			}
 			files.delete(spec)
+		}
+		if (piece.lateRan) {
+			for (const [spec, table] of enteredBy) {
+				if (specs.has(spec)) continue
+				piece.lateRan[spec] = Object.fromEntries(
+					[...table].map(([module, entered]) => [module, [...entered]]),
+				)
+				enteredBy.delete(spec)
+			}
 		}
 		raw.writeFileSync(
 			path.join(recordRoot, `piece-${process.pid}-${sequence++}.json`),

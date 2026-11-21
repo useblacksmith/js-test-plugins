@@ -8,11 +8,13 @@ import { fileURLToPath } from 'node:url'
 import { describeSelection, Session, type Pending as Planned } from '../../core/src/engine.ts'
 import { ENV_REPO } from '../../core/src/fs-recorder.ts'
 import { repoRoot } from '../../core/src/git.ts'
-import type { RunRecord } from '../../core/src/record.ts'
 import type { Options } from '../../core/src/select.ts'
 import { shardFor } from '../../core/src/shard.ts'
+import type { Entered } from '../../core/src/unitstore.ts'
 import { readJson, writeJson, type Shard } from '../../core/src/store.ts'
+import { digester } from './narrow.ts'
 import { ENV_IN_CLI, ENV_RUN, dataDir } from './paths.ts'
+import type { MochaRun } from './pieces.ts'
 
 /**
  * blacksmith-mocha affected [--shard i/n] [--json] -- <mocha args>
@@ -85,6 +87,7 @@ async function context(): Promise<Context> {
 		dir,
 		options,
 		always: ALWAYS,
+		digester: digester(repo),
 		log,
 		warn: (message) => console.error(`[blacksmith] ${message}`),
 	})
@@ -164,9 +167,27 @@ async function commit(ctx: Context, runFiles: string[]): Promise<void> {
 	}
 	const defaultRun = path.join(ctx.dir, 'run.json')
 	const runs = (runFiles.length > 0 ? runFiles : [defaultRun])
-		.map((file) => readJson<RunRecord>(file))
+		.map((file) => readJson<MochaRun>(file))
 		.filter((run) => run !== null)
-	const { records, anchored } = await ctx.session.commit(pending, runs)
+	// Without what every spec file entered, a change to a module reruns whatever loaded it.
+	let entered: Map<string, Entered> | undefined
+	// A run of nothing entered nothing, and takes nothing from what is known.
+	if (runs.every((run) => run.ran)) {
+		entered = new Map()
+		for (const run of runs) {
+			for (const [spec, file] of Object.entries(run.files)) {
+				entered.set(spec, {
+					ran: run.ran?.[spec],
+					partial: file.all?.some((title) => !file.tests[title]) ?? false,
+				})
+			}
+		}
+	}
+	const { records, anchored } = await ctx.session.commit(
+		pending,
+		runs.map(({ ran: _, ...run }) => run),
+		entered ? { entered } : {},
+	)
 	rmSync(pendingFile, { force: true })
 	rmSync(defaultRun, { force: true })
 	const entries = Object.values(records.files)
