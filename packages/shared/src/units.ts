@@ -19,6 +19,23 @@ export interface Unit {
 	body: string
 	/** The module's other top-level names (imports included) the unit mentions. */
 	refs: string[]
+	/**
+	 * For a `const` holding an object literal of plain keys: each key with the
+	 * hash of its value, so a change to one key is a change for what reads that key.
+	 */
+	keys?: Record<string, string>
+	/** Hash of that declaration around its properties. */
+	frame?: string
+	/**
+	 * Those of `refs` the unit only reads keys of (`X.key`), with the keys: such
+	 * constants of the module, and names it imports, which may hold one.
+	 */
+	reads?: Record<string, string[]>
+	/**
+	 * For a `v`: evaluating it may do more than make the value (it calls
+	 * something, constructs, assigns), which every test that loaded the module saw.
+	 */
+	effects?: true
 }
 
 /** A value import: the module specifier and the names taken from it, `'*'` for all of them. */
@@ -27,6 +44,8 @@ export type Import = [specifier: string, names: string[] | '*']
 export interface Digest {
 	rest: string
 	restRefs: string[]
+	/** As `Unit.reads`, for the statements of `rest`. */
+	restReads?: Record<string, string[]>
 	/** In source order. */
 	units: Record<string, Unit>
 	/** Exported name → the unit (or imported local) it names. */
@@ -37,12 +56,19 @@ export interface Digest {
 	stars: string[]
 	/** Bindings the module itself uses; re-exports are not among them. */
 	imports: Import[]
+	/** Specifier → imported name → what the module calls it, where that is not just the name. */
+	aliases?: Record<string, Record<string, string[]>>
 	/** Every specifier the module loads statically, in order. */
 	sources: string[]
 	/** How many of `sources` come first, in order, as the module loads. */
 	linked: number
 	/** The module may take any name from a module the analysis cannot name. */
 	wild: boolean
+	/**
+	 * A CommonJS module, which `analyze` only describes when asked: what it
+	 * loads is known, and any change to it is a change to all of it.
+	 */
+	opaque?: true
 }
 
 export interface Analysis {
@@ -52,6 +78,34 @@ export interface Analysis {
 }
 
 type Node = { type: string; start: number; end: number; [key: string]: any }
+
+/** The identifiers a stretch of code mentions, and how it uses each. */
+class Ids extends Set<string> {
+	/** Mentioned as a value, which may be read in any way. */
+	readonly whole = new Set<string>()
+	/** Name → the keys read off it as `name.key`. */
+	readonly parts = new Map<string, Set<string>>()
+
+	absorb(other: Ids): void {
+		for (const id of other) this.add(id)
+		for (const id of other.whole) this.whole.add(id)
+		for (const [id, keys] of other.parts) for (const key of keys) this.read(id, key)
+	}
+
+	read(id: string, key: string): void {
+		const keys = this.parts.get(id)
+		if (keys) keys.add(key)
+		else this.parts.set(id, new Set([key]))
+	}
+
+	/** The keys read off `id`, when that is all that is done with it. */
+	readsOf(id: string): string[] | null {
+		return this.whole.has(id) ? null : [...(this.parts.get(id) ?? [])].sort()
+	}
+}
+
+/** What every object has without holding it as a key: reading one is not reading a key of the literal. */
+const inherited = (key: string): boolean => key in {}
 
 const VALUE_TS = new Set([
 	'TSAsExpression',
@@ -105,6 +159,39 @@ function unwrap(node: Node | null | undefined): Node | null {
 	return node ?? null
 }
 
+const EFFECTS = new Set([
+	'CallExpression',
+	'NewExpression',
+	'TaggedTemplateExpression',
+	'AwaitExpression',
+	'YieldExpression',
+	'AssignmentExpression',
+	'UpdateExpression',
+	'ImportExpression',
+	'StaticBlock',
+	'Decorator',
+])
+
+/** Whether evaluating `node` may do more than make a value: what a function or an instance runs later is left out. */
+function effects(node: Node | null | undefined): boolean {
+	if (!node || typeof node !== 'object') return false
+	if (Array.isArray(node)) return node.some(effects)
+	if (typeof node.type !== 'string') return false
+	if (EFFECTS.has(node.type)) return true
+	if (node.type === 'UnaryExpression' && node.operator === 'delete') return true
+	if (node.type === 'ArrowFunctionExpression' || node.type === 'FunctionExpression') return false
+	if (node.type === 'FunctionDeclaration') return false
+	if (node.type === 'MethodDefinition') return node.computed ? effects(node.key) : false
+	if (node.type === 'PropertyDefinition' && !node.static) return node.computed ? effects(node.key) : false
+	for (const key in node) {
+		if (key === 'type' || key === 'start' || key === 'end') continue
+		if (key === 'typeAnnotation' || key === 'typeArguments' || key === 'typeParameters') continue
+		const child = node[key]
+		if (child && typeof child === 'object' && effects(child)) return true
+	}
+	return false
+}
+
 function isFunction(node: Node | null): node is Node {
 	return (
 		node?.type === 'ArrowFunctionExpression' ||
@@ -143,8 +230,13 @@ function bound(pattern: Node | null, names: string[]): string[] {
  * already using the instrumentation's names. With `key` the marks report to
  * the function `installHit` leaves on `globalThis`, as `globalFooter(key)`
  * does; without, to the one `footer` declares in the module.
+ *
+ * With `loads`, a CommonJS module gets a digest too, of what it loads and
+ * nothing else (`opaque`): it is not marked, and its own changes still reach
+ * every test that loaded it, but a change elsewhere reaches it only through
+ * a module it requires.
  */
-export function analyze(code: string, file: string, key?: string): Analysis | null {
+export function analyze(code: string, file: string, key?: string, loads = false): Analysis | null {
 	const language = lang(file)
 	if (!language || code.includes(HIT)) return null
 	let program: Node
@@ -162,6 +254,11 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 	const holes: Array<[number, number]> = comments.map((c) => [c.start, c.end])
 	let opaque = false
 	let wild = false
+	// What makes a module opaque, and whether what it loads can still be named.
+	let commonjs = false
+	let unnamed = false
+	let requires = 0
+	let required = 0
 	const loaded: Import[] = []
 
 	const literal = (node: Node | undefined): string | null => {
@@ -195,7 +292,7 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 	}
 
 	/** Collects the identifiers `node` mentions as values into `ids`. */
-	const walk = (node: unknown, ids: Set<string>): void => {
+	const walk = (node: unknown, ids: Ids): void => {
 		if (Array.isArray(node)) {
 			for (const child of node) walk(child, ids)
 			return
@@ -211,6 +308,7 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 		) {
 			if (n.type === 'TSExportAssignment' || n.type === 'TSImportEqualsDeclaration') {
 				opaque = true
+				unnamed = true
 			}
 			holes.push([n.start, n.end])
 			return
@@ -223,7 +321,10 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 			for (const param of (n.params ?? []) as Node[]) {
 				bound(param.type === 'TSParameterProperty' ? param.parameter : param, declared as string[])
 			}
-			if (declared.includes('globalThis')) opaque = true
+			if (declared.includes('globalThis')) {
+				opaque = true
+				unnamed = true
+			}
 		}
 		if ((n.type === 'ClassDeclaration' || n.type === 'ClassExpression') && decorated(n)) {
 			metadata++
@@ -235,7 +336,20 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 			case 'Identifier':
 			case 'JSXIdentifier':
 				ids.add(n.name)
-				if (n.name === 'eval') opaque = true
+				ids.whole.add(n.name)
+				if (n.name === 'require') requires++
+				if (n.name === 'eval') {
+					opaque = true
+					unnamed = true
+				}
+				break
+			case 'Property':
+				// A plain key names nothing; what it is kept as a mention for is the hash, which has always had it.
+				if (!n.computed && !n.shorthand && n.key.type === 'Identifier') {
+					ids.add(n.key.name)
+					walk(n.value, ids)
+					return
+				}
 				break
 			case 'MemberExpression':
 				if (
@@ -245,6 +359,7 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 					(n.object.type === 'Identifier' && n.object.name === 'exports')
 				) {
 					opaque = true
+					commonjs = true
 				}
 				if (
 					n.object.type === 'MetaProperty' &&
@@ -253,6 +368,24 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 				) {
 					wild = true
 				}
+				// `X.key` reads one key of `X`, and `x.name` mentions no `name`.
+				if (!n.computed && n.property.type === 'Identifier') {
+					const key: string = n.property.name
+					if (n.object.type === 'Identifier' && !inherited(key)) {
+						ids.add(n.object.name)
+						ids.read(n.object.name, key)
+						if (n.object.name === 'require') requires++
+						if (n.object.name === 'eval') {
+							opaque = true
+							unnamed = true
+						}
+					} else {
+						walk(n.object, ids)
+					}
+					ids.add(key)
+					if (key === 'require') requires++
+					return
+				}
 				break
 			case 'ImportExpression': {
 				const source = literal(n.source)
@@ -260,8 +393,19 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 				else loaded.push([source, '*'])
 				break
 			}
+			case 'TaggedTemplateExpression': {
+				// `X.key()` hands `X` to what it calls as `this`, which may read any key.
+				const called = unwrap(n.tag)
+				if (called?.type === 'MemberExpression' && called.object.type === 'Identifier') {
+					ids.whole.add(called.object.name)
+				}
+				break
+			}
 			case 'CallExpression': {
 				const callee = unwrap(n.callee)
+				if (callee?.type === 'MemberExpression' && callee.object.type === 'Identifier') {
+					ids.whole.add(callee.object.name)
+				}
 				const name =
 					callee?.type === 'Identifier'
 						? callee.name
@@ -275,7 +419,10 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 				) {
 					const source = literal(n.arguments[0])
 					if (source === null) wild = true
-					else loaded.push([source, '*'])
+					else {
+						loaded.push([source, '*'])
+						if (name === 'require') required++
+					}
 				}
 				break
 			}
@@ -283,7 +430,7 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 		children(n, ids)
 	}
 
-	const children = (n: Node, ids: Set<string>): void => {
+	const children = (n: Node, ids: Ids): void => {
 		for (const key in n) {
 			if (key === 'type' || key === 'start' || key === 'end') continue
 			const child = n[key]
@@ -298,11 +445,14 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 		split: number
 		end: number
 		prefix: string
-		ids: Set<string>
+		ids: Ids
+		effects?: boolean
+		/** For an object literal of plain keys: where it is, and each key with its value. */
+		object?: { start: number; end: number; keys: Array<{ key: string; start: number; end: number; ids: Ids }> }
 	}
 	const drafts: Draft[] = []
 	const rest: Array<{ start: number; end: number } | string> = []
-	const restIds = new Set<string>()
+	const restIds = new Ids()
 	const exports: Record<string, string> = {}
 	const reexports: Digest['reexports'] = {}
 	const stars: string[] = []
@@ -335,15 +485,55 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 		marks.push([at, `${separator}${call};`])
 	}
 
+	/**
+	 * The keys of an object literal a `const` holds, when each is a plain key
+	 * with a value of its own: no spread, computed key, accessor or method, and
+	 * no function that could reach the other keys through `this`.
+	 */
+	const keysOf = (name: string, value: Node | null): Draft['object'] => {
+		if (value?.type !== 'ObjectExpression') return undefined
+		const keys: NonNullable<Draft['object']>['keys'] = []
+		const seen = new Set<string>()
+		for (const property of value.properties as Node[]) {
+			if (property.type !== 'Property' || property.computed || property.kind !== 'init') return undefined
+			if (property.method || unwrap(property.value)?.type === 'FunctionExpression') return undefined
+			const key =
+				property.key.type === 'Identifier'
+					? (property.key.name as string)
+					: property.key.type === 'Literal' && typeof property.key.value === 'string'
+						? (property.key.value as string)
+						: null
+			if (key === null || inherited(key) || seen.has(key)) return undefined
+			seen.add(key)
+			const ids = new Ids()
+			walk(property.value, ids)
+			// A value that mentions the object may read its other keys.
+			if (ids.has(name)) return undefined
+			keys.push({ key, start: property.value.start, end: property.value.end, ids })
+		}
+		return { start: value.start, end: value.end, keys }
+	}
+
 	const unit = (name: string, node: Node, value: Node | null, prefix: string): void => {
-		const ids = new Set<string>()
+		const ids = new Ids()
 		walk(node, ids)
 		const fn = unwrap(value)
 		if (isFunction(fn) && fn.body) {
 			drafts.push({ name, kind: 'f', start: node.start, split: fn.body.start, end: node.end, prefix, ids })
 			mark(name, fn)
 		} else {
-			drafts.push({ name, kind: 'v', start: node.start, split: node.start, end: node.end, prefix, ids })
+			const object = prefix === 'const ' ? keysOf(name, fn) : undefined
+			drafts.push({
+				name,
+				kind: 'v',
+				start: node.start,
+				split: node.start,
+				end: node.end,
+				prefix,
+				ids,
+				effects: effects(node),
+				...(object ? { object } : {}),
+			})
 		}
 	}
 
@@ -398,7 +588,10 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 								? '*'
 								: (specifier.imported.name ?? specifier.imported.value)
 					names.push([name, specifier.local.name])
-					if (mayShadow && specifier.local.name === 'globalThis') opaque = true
+					if (mayShadow && specifier.local.name === 'globalThis') {
+						opaque = true
+						unnamed = true
+					}
 				}
 				// TypeScript drops an import that names only types.
 				if (node.specifiers.length > 0 && names.length === 0) break
@@ -462,7 +655,7 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 				declaration(node, false)
 		}
 	}
-	if (opaque) return null
+	if (opaque && !(loads && commonjs)) return null
 	const names = new Set<string>()
 	for (const draft of drafts) {
 		// Two declarations of one name (`var` twice, a function redeclared).
@@ -484,7 +677,7 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 	}
 
 	// What a mentioned name stands for; a name that is neither is a global.
-	const used = new Set(restIds)
+	const used = new Set<string>(restIds)
 	for (const draft of drafts) for (const id of draft.ids) used.add(id)
 	const dropped = new Set<(typeof imported)[number]>()
 	const imports: Import[] = [...loaded]
@@ -511,18 +704,56 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 	const first = new Set(sources).size
 	for (const [source] of loaded) sources.push(source)
 
-	const refsOf = (ids: Set<string>, self: string | null): string[] =>
+	const refsOf = (ids: ReadonlySet<string>, self: string | null): string[] =>
 		[...ids].filter((id) => id !== self && (names.has(id) || bindings.has(id))).sort()
 	const resolved = (refs: string[]): string =>
 		refs.map((ref) => `${ref}=${bindings.get(ref) ?? ''}`).join('\n')
 
 	// A value nothing exports or mentions is there for what evaluating it
 	// does, like any other top-level statement.
-	const mentioned = new Set(restIds)
+	const mentioned = new Set<string>(restIds)
 	for (const draft of drafts) {
 		for (const id of draft.ids) if (id !== draft.name) mentioned.add(id)
 	}
 	const exportedLocals = new Set(Object.values(exports))
+	// The constants whose keys a change is told apart by: declared once, and read by something.
+	const keyed = new Set<string>()
+	const declared = new Map<string, number>()
+	for (const draft of drafts) declared.set(draft.name, (declared.get(draft.name) ?? 0) + 1)
+	for (const draft of drafts) {
+		if (draft.object && declared.get(draft.name) === 1) keyed.add(draft.name)
+	}
+	// Imported by name: a namespace or a default export holds no such constant.
+	const named = new Set<string>()
+	let aliases: Digest['aliases']
+	const locals = new Map<string, Map<string, Set<string>>>()
+	for (const entry of imported) {
+		if (dropped.has(entry)) continue
+		for (const [name, local] of entry.names) {
+			if (!bindings.has(local) || name === '*') continue
+			if (name !== 'default' && !names.has(local)) named.add(local)
+			let of = locals.get(entry.source)
+			if (!of) locals.set(entry.source, (of = new Map()))
+			const list = of.get(name)
+			if (list) list.add(local)
+			else of.set(name, new Set([local]))
+		}
+	}
+	// One specifier may be imported more than once, a name taken each time its own way.
+	for (const [source, of] of locals) {
+		for (const [name, list] of of) {
+			if (list.size === 1 && list.has(name)) continue
+			;((aliases ??= {})[source] ??= {})[name] = [...list].sort()
+		}
+	}
+	const readsOf = (ids: Ids, refs: string[]): Record<string, string[]> | undefined => {
+		let reads: Record<string, string[]> | undefined
+		for (const ref of refs) {
+			const keys = keyed.has(ref) || named.has(ref) ? ids.readsOf(ref) : null
+			if (keys) (reads ??= {})[ref] = keys
+		}
+		return reads
+	}
 	const units: Record<string, Unit> = {}
 	const restParts: string[] = []
 	for (const part of rest) {
@@ -532,7 +763,7 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 		const refs = refsOf(draft.ids, draft.name)
 		if (draft.kind === 'v' && !exportedLocals.has(draft.name) && !mentioned.has(draft.name)) {
 			restParts.push(draft.prefix + text(draft.start, draft.end))
-			for (const id of draft.ids) restIds.add(id)
+			restIds.absorb(draft.ids)
 			continue
 		}
 		const tail = `\n${resolved(refs)}`
@@ -543,6 +774,17 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 			body: hash(text(draft.split, draft.end) + tail),
 			refs,
 		}
+		const reads = readsOf(draft.ids, refs)
+		if (reads) next.reads = reads
+		if (draft.effects || previous?.effects) next.effects = true
+		if (draft.object && keyed.has(draft.name)) {
+			const { object } = draft
+			next.frame = hash(`${draft.prefix}${text(draft.start, object.start)}\0${text(object.end, draft.end)}`)
+			next.keys = {}
+			for (const { key, start, end, ids } of object.keys) {
+				next.keys[key] = hash(`${text(start, end)}\n${resolved(refsOf(ids, null))}`)
+			}
+		}
 		// One destructuring declares several names; a repeated `var` keeps both texts.
 		units[draft.name] = previous
 			? {
@@ -550,19 +792,50 @@ export function analyze(code: string, file: string, key?: string): Analysis | nu
 					sig: hash(previous.sig + next.sig),
 					body: hash(previous.body + next.body),
 					refs: [...new Set([...previous.refs, ...refs])].sort(),
+					...(next.effects ? { effects: true as const } : {}),
 				}
 			: next
 	}
+	if (opaque) {
+		// `require` handed on or looked up some other way, or exports passed on: it may load or hold anything.
+		const any =
+			wild ||
+			unnamed ||
+			requires > required ||
+			/\bcreateRequire\b|['"`]require['"`]/.test(code) ||
+			stars.length > 0 ||
+			Object.keys(reexports).length > 0
+		const all = [...new Set(sources)]
+		return {
+			digest: {
+				rest: hash(code),
+				restRefs: [],
+				units: {},
+				exports: {},
+				reexports: {},
+				stars: [],
+				imports: all.map((source) => [source, '*']),
+				sources: all,
+				linked: first,
+				wild: any,
+				opaque: true,
+			},
+			marks: [],
+		}
+	}
 	const restRefs = refsOf(restIds, null)
+	const restReads = readsOf(restIds, restRefs)
 	return {
 		digest: {
 			rest: hash(`${restParts.join('\n')}\n${resolved(restRefs)}`),
 			restRefs,
+			...(restReads ? { restReads } : {}),
 			units,
 			exports,
 			reexports,
 			stars,
 			imports,
+			...(aliases ? { aliases } : {}),
 			sources: [...new Set(sources)],
 			linked: first,
 			wild,

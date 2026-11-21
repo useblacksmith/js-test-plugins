@@ -2,7 +2,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
-import { difference, resolveDigest } from '../../shared/src/narrow.ts'
+import { difference, Narrowing, resolveDigest } from '../../shared/src/narrow.ts'
 import { analyze, footer } from '../../shared/src/units.ts'
 import { packageRoot } from './harness.ts'
 
@@ -210,6 +210,35 @@ describe('narrow: module digests', () => {
 		expect(analyze('export declare const a: number', 'a.d.ts')).toBeNull()
 	})
 
+	test('a CommonJS module is described by what it loads when asked', () => {
+		const loads = (code: string) => analyze(code, 'a.js', undefined, true)?.digest
+		expect(loads("const b = require('./b.js')\nmodule.exports = { ...b, c: require('./c.js').c }")).toMatchObject({
+			opaque: true,
+			wild: false,
+			units: {},
+			imports: [
+				['./b.js', '*'],
+				['./c.js', '*'],
+			],
+		})
+		expect(loads('module.exports = {}')).toMatchObject({ opaque: true, wild: false, imports: [] })
+		for (const code of [
+			'module.exports = require(name)',
+			'const load = require\nmodule.exports = load',
+			"module.exports = require.resolve('./b.js')",
+			'module.exports = eval("1")',
+			"module.exports = module.require('./b.js')",
+			"module.exports = module['require']('./b.js')",
+			"module.exports = require('node:module').createRequire(__filename)('./b.js')",
+		]) {
+			expect(loads(code)).toMatchObject({ opaque: true, wild: true })
+		}
+		expect(loads('export const a = eval("1")')).toBeUndefined()
+		const before = resolveDigest(loads("module.exports = require('./b.js')")!, {})
+		const after = resolveDigest(loads("module.exports = require('./b.js') // same")!, {})
+		expect(difference(before, after)).toBe('all')
+	})
+
 	test('instrumented code keeps directives first and runs as before', async () => {
 		const code = [
 			"'use client'",
@@ -278,6 +307,207 @@ describe('narrow: module digests', () => {
 		expect(difference(digest('export const a = 1'), before)).toBeNull()
 		const after = digest("export { type T } from './types.ts'\nimport './types.ts'\nexport const a = 1")
 		expect(difference(before, after)).toMatchObject({ added: ['?./types.ts'] })
+	})
+
+	test('a value that may do more than make it is told apart from one that cannot', () => {
+		const made = (code: string) => digest(`export const a = ${code}`, 'a.tsx').units['a']?.effects
+		for (const code of [
+			'1',
+			"'a' + `b${c}`",
+			'[c, ...d]',
+			'{ c, d: e.f, ...g }',
+			'() => c()',
+			'function () { return new C() }',
+			'class { c = d(); e() { f() } }',
+			'<C d={() => e()} />',
+			'c as unknown as D<E>',
+		]) {
+			expect(made(code), code).toBeUndefined()
+		}
+		for (const code of [
+			'c()',
+			'new C()',
+			'c`d`',
+			'[c()]',
+			'{ c: d() }',
+			'(c = 1)',
+			'c++',
+			'delete c.d',
+			"import('./c.ts')",
+			'class { static c = d() }',
+			'class { static { c() } }',
+			'class extends c() {}',
+			'<C d={e()} />',
+		]) {
+			expect(made(code), code).toBe(true)
+		}
+		expect(digest('export function a() { b() }').units['a']?.effects).toBeUndefined()
+		expect(digest('export enum A { B = 1 }').units['A']?.effects).toBeUndefined()
+	})
+
+	test('a changed value that may do more than make it is a change for every test that loaded the module', () => {
+		const logic = (code: string) => digest(`import { make } from './make.ts'\nexport const a = ${code}\nexport const b = 1`)
+		expect(difference(logic("make('a')"), logic("make('b')"))).toBe('all')
+		expect(difference(logic("'a'"), logic("make('a')"))).toBe('all')
+		expect(difference(logic("make('a')"), logic("'a'"))).toBe('all')
+		expect(difference(logic("['a']"), logic("['b']"))).toMatchObject({ values: new Set(['a']) })
+		// One that is new or gone ran, or no longer runs, for each of them.
+		const more = digest("import { make } from './make.ts'\nexport const a = 'a'\nexport const b = 1\nconst c = make('c')")
+		expect(difference(logic("'a'"), more)).toBe('all')
+		expect(difference(more, logic("'a'"))).toBe('all')
+	})
+
+	describe('an object literal of plain keys', () => {
+		const flags = (body: string, tail = '') => digest(`export const FLAGS = {\n${body}\n} as const\n${tail}`)
+
+		test('a changed, new or removed key is a change to that key', () => {
+			const before = flags("A: 'a',\nB: 'b',")
+			expect(difference(before, flags("A: 'a',\nB: 'b2',"))).toMatchObject({
+				values: new Set(['FLAGS']),
+				keys: new Map([['FLAGS', new Set(['B'])]]),
+			})
+			expect(difference(before, flags("A: 'a',\nB: 'b',\nC: 'c',"))).toMatchObject({
+				keys: new Map([['FLAGS', new Set(['C'])]]),
+			})
+			expect(difference(before, flags("B: 'b',"))).toMatchObject({
+				keys: new Map([['FLAGS', new Set(['A'])]]),
+			})
+		})
+
+		test('space, comments and quotes between the keys change nothing', () => {
+			const before = flags("A: 'a',\nB: 'b',")
+			expect(difference(before, flags("A: 'a', // first\n\n  'B': 'b'"))).toBeNull()
+		})
+
+		test('keys in another order are a change to the whole value', () => {
+			const change = difference(flags('A: a,\nB: b,'), flags('B: b,\nA: a,'))
+			expect(change).toMatchObject({ values: new Set(['FLAGS']), keys: new Map() })
+		})
+
+		test('a function of the module reruns for the keys it reads', () => {
+			const tail = 'export const a = () => FLAGS.A\nexport const any = (k) => FLAGS[k]\nexport const b = () => FLAGS.B'
+			const change = difference(flags("A: 'a',\nB: 'b',", tail), flags("A: 'a',\nB: 'b2',", tail))
+			expect(change).toMatchObject({ functions: new Set(['any', 'b']) })
+		})
+
+		test('a value built from the object, or a statement reading the key, takes the change', () => {
+			const built = 'export const LIST = Object.values(FLAGS)'
+			expect(
+				difference(flags("A: 'a',", built), flags("A: 'a',\nB: 'b',", built)),
+			).toMatchObject({ values: new Set(['FLAGS', 'LIST']), keys: new Map([['FLAGS', new Set(['B'])]]) })
+			const read = 'console.log(FLAGS.A)'
+			expect(difference(flags("A: 'a',\nB: 'b',", read), flags("A: 'a',\nB: 'b2',", read))).not.toBe('all')
+			expect(difference(flags("A: 'a',\nB: 'b',", read), flags("A: 'a2',\nB: 'b',", read))).toBe('all')
+		})
+
+		test('more than a key is a change to the whole value', () => {
+			const before = flags("A: 'a',")
+			for (const after of [
+				digest("export const FLAGS = {\nA: 'a',\n...more\n} as const"),
+				digest("export const FLAGS = {\nA: 'a',\n[key]: 1\n} as const"),
+				digest("export const FLAGS = {\nA: 'a',\nget B() { return 1 }\n} as const"),
+				digest("export const FLAGS = {\nA: 'a',\nb() { return this.A }\n} as const"),
+				digest("export const FLAGS = {\nA: 'a',\nb: function () { return this.A }\n} as const"),
+				digest("export const FLAGS = {\nA: 'a',\ntoString: 1\n} as const"),
+				digest("export let FLAGS = {\nA: 'a',\nB: 'b'\n}"),
+			]) {
+				const change = difference(before, after)
+				expect(change).toMatchObject({ values: new Set(['FLAGS']) })
+				expect(change).toHaveProperty('keys', new Map())
+			}
+			expect(difference(before, digest("export const FLAGS = Object.freeze({\nA: 'a',\nB: 'b'\n})"))).toBe('all')
+		})
+
+		test('a key whose value may do more than make it is a change for every test that loaded the module', () => {
+			expect(difference(flags("A: 'a',\nB: make('b'),"), flags("A: 'a',\nB: make('b2'),"))).toBe('all')
+			// A value built from the object runs what it ran before.
+			const names = 'export const NAMES = Object.keys(FLAGS)'
+			expect(difference(flags("A: 'a',", names), flags("A: 'a2',", names))).toMatchObject({
+				values: new Set(['FLAGS', 'NAMES']),
+			})
+		})
+
+		test('a value that can reach the other keys makes the object one value', () => {
+			expect(digest("export const FLAGS = {\nA: 'a',\nB: () => FLAGS.A,\n}").units['FLAGS']?.keys).toBeUndefined()
+			const reads = (code: string) =>
+				digest(`import { FLAGS } from './flags.ts'\n${code}`).units['a']?.reads
+			// Called off the object, a value gets the object as `this`.
+			expect(reads('export const a = () => FLAGS.B()')).toBeUndefined()
+			expect(reads('export const a = () => FLAGS.B`text`')).toBeUndefined()
+			expect(reads('export const a = () => call(FLAGS.B)')).toEqual({ FLAGS: ['B'] })
+		})
+
+		test('a unit of an importer is told apart by the keys it reads', () => {
+			const reads = (code: string, file = 'a.ts') =>
+				digest(`import { FLAGS } from './flags.ts'\n${code}`, file).units['a']?.reads
+			expect(reads('export const a = () => [FLAGS.A, FLAGS?.B, x.FLAGS]')).toEqual({ FLAGS: ['A', 'B'] })
+			expect(reads('export const a = () => ({ FLAGS: 1 })')).toEqual({ FLAGS: [] })
+			for (const whole of [
+				'export const a = () => FLAGS[key]',
+				"export const a = () => FLAGS['A']",
+				'export const a = () => Object.values(FLAGS)',
+				'export const a = () => FLAGS.hasOwnProperty(key)',
+				'export const a = () => ({ FLAGS })',
+				'export const { a } = FLAGS',
+				'export const a = () => <FLAGS.A />',
+			]) {
+				expect(reads(whole, 'a.tsx')).toBeUndefined()
+			}
+			// A namespace and a default export are no such constant.
+			expect(digest("import all, * as ns from './flags.ts'\nexport const a = () => [all.A, ns.A]").units['a']?.reads).toBeUndefined()
+			// One specifier imported twice, called two ways.
+			expect(
+				digest("import { FLAGS } from './flags.ts'\nimport { FLAGS as ALL } from './flags.ts'\nexport const a = () => [FLAGS.A, ALL.B]").aliases,
+			).toEqual({ '?./flags.ts': { FLAGS: ['ALL', 'FLAGS'] } })
+			// One module under two specifiers, called two ways.
+			const analysis = analyze(
+				"import { FLAGS } from './flags.ts'\nimport { FLAGS as ALL } from '~/flags'\nexport const a = () => [FLAGS.A, Object.keys(ALL)]",
+				'a.ts',
+			)
+			expect(
+				resolveDigest(analysis!.digest, { './flags.ts': 'flags.ts', '~/flags': 'flags.ts' }).aliases,
+			).toEqual({ 'flags.ts': { FLAGS: ['ALL', 'FLAGS'] } })
+		})
+
+		test('a test reruns for a key something it ran reads, through re-exports too', () => {
+			const at = (code: string, file: string) =>
+				resolveDigest(analyze(code, file)!.digest, {
+					'./flags.ts': 'flags.ts',
+					'./index.ts': 'index.ts',
+				})
+			const modules = {
+				'flags.ts': at("export const FLAGS = {\nA: 'a',\nB: 'b',\n}", 'flags.ts'),
+				'index.ts': at("export { FLAGS as F } from './flags.ts'", 'index.ts'),
+				'a.ts': at("import { F } from './index.ts'\nexport const a = () => F.A", 'a.ts'),
+				'b.ts': at("import { FLAGS as mine } from './flags.ts'\nexport const b = () => mine.B\nexport const other = () => mine.A", 'b.ts'),
+				'all.ts': at("import { F } from './index.ts'\nexport const all = () => Object.keys(F)\nexport const one = () => F.A", 'all.ts'),
+				'top.ts': at("import { FLAGS } from './flags.ts'\nexport const top = [FLAGS.B]", 'top.ts'),
+				'out.ts': at("import { FLAGS } from './flags.ts'\nexport { FLAGS }\nexport const out = () => FLAGS.A", 'out.ts'),
+				'ns.ts': at("import * as flags from './flags.ts'\nexport const ns = () => flags", 'ns.ts'),
+			}
+			const narrowing = new Narrowing(
+				modules,
+				new Map([['flags.ts', at("export const FLAGS = {\nA: 'a',\nB: 'b2',\nC: 'c',\n}", 'flags.ts')]]),
+			)
+			const affected = (ran: Record<string, string[]>) =>
+				narrowing.affects('flags.ts', {
+					deps: new Set(['flags.ts', 'index.ts', ...Object.keys(ran)]),
+					ran: { 'flags.ts': [''], 'index.ts': [''], ...ran },
+				})
+			expect(affected({ 'a.ts': ['', 'a'] })).toBe(false)
+			expect(affected({ 'b.ts': ['', 'other'] })).toBe(false)
+			expect(affected({ 'b.ts': ['', 'b'] })).toBe(true)
+			expect(affected({ 'all.ts': ['', 'one'] })).toBe(false)
+			expect(affected({ 'all.ts': ['', 'all'] })).toBe(true)
+			expect(affected({ 'top.ts': [''] })).toBe(true)
+			expect(affected({ 'out.ts': [''] })).toBe(true)
+			expect(affected({ 'ns.ts': [''] })).toBe(true)
+			// A module that was not watched may have run any of its functions.
+			const unwatched = (file: string) =>
+				narrowing.affects('flags.ts', { deps: new Set(['flags.ts', 'index.ts', file]), ran: { 'flags.ts': [''] } })
+			expect(unwatched('b.ts')).toBe(true)
+			expect(unwatched('a.ts')).toBe(false)
+		})
 	})
 
 	test('a function held in a const that changes places reruns everything', () => {

@@ -70,6 +70,7 @@ A change to a file does not rerun every test file that loaded it. The plugin rec
 | --- | --- |
 | The body of a top-level function (`function f() {}`, `const f = () => {}`) | Those that called the function |
 | Another top-level declaration (a constant, a class, an enum), or a function's parameter list | Those that loaded a module importing it by name, through re-exports too. A namespace import, a dynamic `import()` or a mock of the module counts as importing every name |
+| One key of an object literal held in a `const` (`const FLAGS = { A: 'a', B: 'b' }`): changed, added or removed | Those that called a function reading that key as `FLAGS.A`, or using the object in any other way (`FLAGS[name]`, `Object.values(FLAGS)`, passing it on), in the file or in a module importing it by name. Those that loaded a module doing so outside a function, too. Any other object counts as one declaration: one with a spread, a computed key, an accessor, a method or a `function` value |
 | Types, comments, or a new declaration nothing uses yet | None. A type annotation inside a class that has a decorator is not a type here: emitted decorator metadata makes it a value, so it counts as a change to the class |
 | A new import | Those that had not loaded the imported module |
 | Any other top-level statement, an `export *`, or declarations that changed places | All that loaded the file |
@@ -78,7 +79,9 @@ A value built from a changed one counts as changed, and a function that mentions
 
 To record function entries the plugin adds one call at the start of each top-level function while Vite transforms the module; source maps account for it. The call names nothing of the module's and does nothing where the plugin is not recording, so a function turned into text with `toString()` still runs wherever that text is evaluated. The record is kept beside the dependency record and travels with it.
 
-What narrowing cannot see: a test whose result depends on a function's source text or `length` rather than on calling it, and a module whose top-level value is there only for the side effects of evaluating it while something else exports or mentions that value.
+What narrowing cannot see: a test whose result depends on a function's source text or `length` rather than on calling it.
+
+A changed top-level value that calls something as it is evaluated (a call, `new`, a tagged template, an assignment, a class's static initializer) reruns every test file that loaded the module, since the call may have done more than make the value. A value of literals, objects, arrays, functions and other names reruns only the test files that loaded a module importing it. A value that is unchanged itself and is built from a changed one counts as the second kind.
 
 ## Caveats
 

@@ -146,7 +146,9 @@ async function refreshDigests(repo: string, records: UnitRecords): Promise<void>
 				return
 			}
 			const current = resolveDigest(analysis.digest, stored.specifiers)
-			if (JSON.stringify(current) === JSON.stringify({ ...current, ...stored })) return
+			// A digest taken before one held as much as it does now is taken again.
+			const complete = Object.keys(current).every((key) => Object.hasOwn(stored, key))
+			if (complete && JSON.stringify(current) === JSON.stringify({ ...current, ...stored })) return
 			const known = analysis.digest.sources.every(
 				(source) =>
 					Object.hasOwn(stored.specifiers, source) || stored.sources.includes(`?${source}`),
