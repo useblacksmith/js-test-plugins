@@ -369,6 +369,7 @@ describe('narrow: module digests', () => {
 			'new Set(c())',
 			'new C(Object.values(d))',
 			'Array.from(c, d)',
+			'JSON.stringify(c, d)',
 			'JSON.parse(c)',
 			'[c].map(async (d) => d)',
 			'JSON.stringify(c, (d, e) => f(e))',

@@ -231,8 +231,8 @@ function effects(node: Node | null | undefined, own: (name: string) => boolean):
 			}
 			const methods = STATICS[object.name]!
 			if (methods !== true && !methods.has(method)) return true
-			// `Array.from(x, fn)` calls `fn`.
-			const takes = object.name === 'Array' && method === 'from'
+			// `Array.from(x, fn)` and `JSON.stringify(x, fn)` call `fn`.
+			const takes = (object.name === 'Array' && method === 'from') || object.name === 'JSON'
 			return args.some((arg, index) => (takes && index > 0 ? called(arg, own) : holds(arg) || effects(arg, own)))
 		}
 		if (!METHODS.has(method) || !builtin(object, own)) return true
