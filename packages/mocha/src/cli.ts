@@ -334,7 +334,13 @@ function entryIn(dir: string, index: number, key: string): Entry | null {
 async function restore(ctx: Context, shard: Shard | null): Promise<Entry[]> {
 	const base = process.env[ENV_CACHE_URL]
 	if (!base || !cacheMode().readable) return []
-	if (existsSync(path.join(ctx.dir, `records${suffix(shard)}.json`))) return []
+	// Both, or the record is what `affected` merged from the entries, each compared with its own anchor: the next command merges them again.
+	if (
+		existsSync(path.join(ctx.dir, `records${suffix(shard)}.json`)) &&
+		existsSync(path.join(ctx.dir, `anchor${suffix(shard)}.json`))
+	) {
+		return []
+	}
 	const own = shard?.index ?? 0
 	let failure: string | null = null
 	const explain = (error: unknown): string =>
@@ -585,12 +591,15 @@ async function commit(ctx: Context, runFiles: string[]): Promise<void> {
 	const always = new Set(alwaysPaths(ctx))
 	const changed = pending.settled ? [] : pending.changed
 	const staleAll = changed.some((file) => always.has(file))
-	const merged = mergeRecords(
-		staleAll ? null : loadRecords(readJson<StoredRecords | Records>(recordsFile)),
-		runs,
-		changed,
-		ctx.options,
-	)
+	const before = staleAll
+		? null
+		: loadRecords(readJson<StoredRecords | Records>(recordsFile))
+	const merged = mergeRecords(before, runs, changed, ctx.options)
+	// A spec file of another shard keeps what every spec file there depended on: this run loaded its own only.
+	const owned = new Set(pending.owned)
+	if (before && Object.keys(merged.files).some((spec) => !owned.has(spec))) {
+		merged.global = [...new Set([...merged.global, ...before.global])].sort()
+	}
 	// The other shards' spec files stay, for a run on another shard count to find; one that no longer exists goes.
 	for (const spec of Object.keys(merged.files)) {
 		if (!existsSync(path.join(ctx.repo, spec))) delete merged.files[spec]
