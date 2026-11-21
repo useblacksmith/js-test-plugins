@@ -263,7 +263,7 @@ function holds(node: Node | null | undefined): boolean {
 	if (!node || typeof node !== 'object') return false
 	if (Array.isArray(node)) return node.some(holds)
 	if (typeof node.type !== 'string') return false
-	if (isFunction(node) || node.type === 'ClassExpression') return true
+	if (/Function|^Class/.test(node.type)) return true
 	for (const key in node) {
 		if (key === 'type' || key === 'start' || key === 'end') continue
 		const child = node[key]
