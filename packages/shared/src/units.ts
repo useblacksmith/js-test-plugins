@@ -218,7 +218,7 @@ function effects(node: Node | null | undefined, own: (name: string) => boolean):
 		const callee = unwrap(node.callee)
 		const args = node.arguments as Node[]
 		if (callee?.type === 'Identifier') {
-			return !CALLED.has(callee.name) || own(callee.name) || effects(args, own)
+			return !CALLED.has(callee.name) || own(callee.name) || args.some((arg) => effects(arg, own))
 		}
 		if (callee?.type !== 'MemberExpression' || callee.computed || callee.property.type !== 'Identifier') return true
 		const method = callee.property.name as string
