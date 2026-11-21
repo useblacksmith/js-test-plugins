@@ -197,6 +197,8 @@ export interface Entry {
 	records: Records
 	anchor: Anchor
 	units: string
+	/** The temporary directory the entry was restored to, for the caller to remove. */
+	dir: string
 }
 
 async function pooled<T, R>(
@@ -234,6 +236,7 @@ function entryIn(dir: string, index: number, key: string): Entry | null {
 			records,
 			anchor,
 			units: path.join(dir, name.replace(/^records/, 'units')),
+			dir,
 		}
 	}
 	return found
@@ -309,6 +312,7 @@ export async function restore(
 			path.join(dataDir(ctx.cwd), `units${suffix(shard)}.json`),
 		)
 	}
+	rmSync(only.dir, { recursive: true, force: true })
 	return null
 }
 
