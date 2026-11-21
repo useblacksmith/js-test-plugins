@@ -345,6 +345,7 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 						walk(n.object, ids)
 					}
 					ids.add(key)
+					if (key === 'require') requires++
 					return
 				}
 				break
@@ -755,7 +756,13 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 	}
 	if (opaque) {
 		// `require` handed on or looked up some other way, or exports passed on: it may load or hold anything.
-		const any = wild || unnamed || requires > required || stars.length > 0 || Object.keys(reexports).length > 0
+		const any =
+			wild ||
+			unnamed ||
+			requires > required ||
+			/\bcreateRequire\b|['"`]require['"`]/.test(code) ||
+			stars.length > 0 ||
+			Object.keys(reexports).length > 0
 		const all = [...new Set(sources)]
 		return {
 			digest: {

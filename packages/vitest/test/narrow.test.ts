@@ -227,6 +227,9 @@ describe('narrow: module digests', () => {
 			'const load = require\nmodule.exports = load',
 			"module.exports = require.resolve('./b.js')",
 			'module.exports = eval("1")',
+			"module.exports = module.require('./b.js')",
+			"module.exports = module['require']('./b.js')",
+			"module.exports = require('node:module').createRequire(__filename)('./b.js')",
 		]) {
 			expect(loads(code)).toMatchObject({ opaque: true, wild: true })
 		}
