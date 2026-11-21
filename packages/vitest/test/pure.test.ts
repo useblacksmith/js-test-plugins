@@ -39,7 +39,7 @@ const METHODS = [
 ]
 const TAME = new Set(
 	[
-		"P|L|N|S|x|y|b|d|f|g|length|'s'|0|1|true|null|.|?.|Object.keys|Object.values|Object.entries|Array.from|Array.isArray",
+		"P|L|N|S|Q|K|x|y|b|d|f|g|length|'s'|0|1|true|null|.|?.|Object.keys|Object.values|Object.entries|Array.from|Array.isArray",
 		'JSON.stringify|Math.abs|String|Number|Boolean|pure|pick|fill|loop|twice|arrow|map|filter|find|findIndex|some|every|includes',
 		'indexOf|slice|toReversed|concat|join|at|toLowerCase|toUpperCase|trim|split|startsWith|has|get|+|===|!=|<|&&|!|typeof ',
 		'Set|Map|const|let|=|(x, y)|([x, y])|({ b })|[y]|{ b }',
@@ -76,7 +76,6 @@ function spin(x) { while (x) {} return 1 }
 function again(x) { return x ? again(x) : 1 }
 function rest(...x) { return x }
 function defaults(x = y, y = 1) { return x }
-function own(Object) { return Object.keys(P) }
 `
 
 function generate(next: () => number): string {
@@ -132,7 +131,9 @@ function generate(next: () => number): string {
 		return `${expression(depth - 1)}.${method}(${args})`
 	}
 	const extra = next() < 0.2 ? `${pick(['const M = ', 'const Object = ', 'let T = ', ''])}${expression(2)}\n` : ''
-	return `${BEFORE}${extra}export const a = ${expression(3)}\n`
+	// A builtin bound anywhere in a module is not the language's for any of it: few modules, so that the rest still tell of objects.
+	const bound = next() < 0.1 ? 'function own(Object) { return Object.keys(P) }\n' : ''
+	return `${BEFORE}${bound}${extra}export const a = ${expression(3)}\n`
 }
 
 /** Runs `code` in a realm of its own and tells what it left behind, or `null` if it threw or did not end. */

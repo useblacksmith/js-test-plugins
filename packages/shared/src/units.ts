@@ -325,13 +325,16 @@ function loud(program: Node, own: (name: string) => boolean, code: string): Set<
 		const node: Node = statement.declaration ?? statement
 		if (node.type === 'FunctionDeclaration' && node.id && node.body) scope.fns.set(node.id.name, node)
 	}
+	const declared = [...scope.fns.keys()]
 	// One that is assigned to is not what was declared. Looked for when a function is first asked for: few modules call one.
 	let checked = false
 	const get = scope.fns.get.bind(scope.fns)
 	scope.fns.get = (name) => {
 		if (!checked) {
 			checked = true
-			for (const written of reassigned(program, new Set())) scope.fns.delete(written)
+			// A `const` cannot be assigned to: such a name is a variable of some function.
+			const written = declared.length ? reassigned(program, new Set()) : new Set()
+			for (const name of declared) if (written.has(name)) scope.fns.delete(name)
 		}
 		return get(name)
 	}

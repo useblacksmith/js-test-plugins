@@ -349,6 +349,9 @@ describe('narrow: module digests', () => {
 		// What is around a call must not throw either, whatever holds it.
 		expect(digest('export default [null.b, [1].map((c) => c)]').units['default']?.effects).toBe(true)
 		expect(digest('export default [1].map((c) => c)').units['default']?.effects).toBeUndefined()
+		// A variable of a function that is named as a `const` helper leaves the helper as it is.
+		const named = "const P = { b: 'b' }\nconst same = (b: string) => b\nfunction other() { let same = 1; same = 2; return same }\n"
+		expect(digest(`${named}export const a = same(P.b)`).units['a']?.effects).toBeUndefined()
 		// A call of the language's that reads a `const` of literals runs nothing of the module's.
 		const HELPERS = [
 			'let n = 0',
