@@ -646,6 +646,11 @@ export class TreeSnapshotProvider {
 		if (restored && restored.entries.length > 0) {
 			return this.fromEntries(options, restored.entries)
 		}
+		// A snapshot that was already here (a cache directory kept between
+		// runs) vouches for other shards' test files too: they are decided
+		// for like a restored entry's, or the next snapshot would drop them.
+		const kept = restored ? null : await this.keptEntry(cacheDir)
+		if (kept) return this.fromEntries(options, [kept])
 		// Vitest 5.1 hands over its record and selects from the changed files
 		// itself; on an older one both are the plugin's.
 		const own = dependencyStore(this.vitest) !== null
@@ -722,6 +727,26 @@ export class TreeSnapshotProvider {
 			return specifications.map((specification) => specification.moduleId)
 		}
 		return selected
+	}
+
+	private async keptEntry(dir: string): Promise<CacheEntry | null> {
+		const snapshot = await readSnapshot(snapshotPath(this.vitest, dir))
+		if (!snapshot) return null
+		const repo = await repoRoot(this.vitest.config.root)
+		const owns = await shardOwner(this.vitest)
+		const tests = new Set<string>()
+		const others = new Map<string, number>()
+		for (const test of snapshot.tests) {
+			const file = path.join(repo, test)
+			if (owns(file)) tests.add(file)
+			else others.set(file, snapshot.times[test] ?? snapshot.at)
+		}
+		for (const [test, time] of Object.entries(snapshot.left)) {
+			const file = path.join(repo, test)
+			if (!owns(file)) this.left.set(file, time)
+		}
+		if (others.size === 0 && this.left.size === 0) return null
+		return { dir, key: '', tests, others }
 	}
 
 	/**
