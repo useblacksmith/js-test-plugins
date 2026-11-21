@@ -23,8 +23,7 @@ import {
 	TreeSnapshotProvider,
 } from './affected.js'
 import {
-	customSequencer,
-	HashShardSequencer,
+	isStable,
 	stableShards,
 } from './sequencer.js'
 
@@ -128,12 +127,6 @@ export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 					}
 				}
 			}
-			// Vite merges this over the user's config, so a sequencer the config
-			// names is kept; `configureVitest` pins its shard assignment.
-			const theirs = customSequencer(
-				(userConfig as { test?: { sequence?: { sequencer?: unknown } } }).test
-					?.sequence?.sequencer,
-			)
 			// Merging a list into `inline: true` would yield `[true, ...]`.
 			const inlineAll =
 				(userConfig as { test?: { server?: { deps?: { inline?: unknown } } } })
@@ -143,7 +136,6 @@ export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 					experimental: options.shadow
 						? { recordDependencies: true }
 						: { recordDependencies: true, vcsProvider: provider },
-					...(theirs ? {} : { sequence: { sequencer: HashShardSequencer } }),
 					...(inlineAll ? {} : { server: { deps: { inline: [PACKAGE] } } }),
 				},
 			}
@@ -201,10 +193,10 @@ export default function blacksmith(options: BlacksmithOptions = {}): Plugin {
 					`[blacksmith] --shard=${vitest.config.shard.index}/${vitest.config.shard.count} splits the run into more than maxShards (${maxShards}) shards; raise the plugin's maxShards option to at least ${vitest.config.shard.count}`,
 				)
 			}
-			// Their sequencer's shards must not depend on which tests the
-			// selection kept, or the provider's view of the shard and vitest's
-			// would differ.
-			if (customSequencer(vitest.config.sequence.sequencer)) {
+			// The sequencer's shards, Vitest's or the config's, must not depend on
+			// which tests the selection kept, or two shards could disagree about
+			// a test and it would run on neither.
+			if (!isStable(vitest.config.sequence.sequencer)) {
 				vitest.config.sequence.sequencer = stableShards(
 					vitest.config.sequence.sequencer,
 				)

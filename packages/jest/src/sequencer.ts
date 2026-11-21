@@ -2,7 +2,6 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 
 import { diffTrees } from '../../shared/src/git.ts'
-import { shardFor } from '../../shared/src/shard.ts'
 import {
 	RECORDS_VERSION,
 	emptyRecords,
@@ -34,8 +33,8 @@ import { dataDir, log, resolveFromJest, state, type Pending } from './state.ts'
 
 /**
  * The `testSequencer`: Jest hands it every test file it is about to run, and
- * runs the ones it returns. `shard` assigns files by a hash of their path, so
- * a file stays in its shard as files come and go; `sort` drops the files the
+ * runs the ones it returns. `shard` is Jest's own, over every test file, before
+ * any is dropped; `sort` drops the files the
  * change does not affect and leaves the order to Jest's own sequencer.
  */
 interface Test {
@@ -46,7 +45,13 @@ interface Test {
 }
 
 interface SequencerClass {
-	new (...args: unknown[]): { sort(tests: Test[]): Test[] | Promise<Test[]> }
+	new (...args: unknown[]): {
+		sort(tests: Test[]): Test[] | Promise<Test[]>
+		shard(
+			tests: Test[],
+			options: { shardIndex: number; shardCount: number },
+		): Test[] | Promise<Test[]>
+	}
 }
 
 interface GlobalConfig {
@@ -74,10 +79,10 @@ export default class BlacksmithSequencer extends Base {
 		)?.globalConfig
 	}
 
-	shard(
+	override shard(
 		tests: Test[],
 		options: { shardIndex: number; shardCount: number },
-	): Test[] {
+	): Test[] | Promise<Test[]> {
 		const ctx = state()
 		const maxShards = ctx.options.maxShards ?? DEFAULT_MAX_SHARDS
 		if (options.shardCount > maxShards) {
@@ -87,11 +92,7 @@ export default class BlacksmithSequencer extends Base {
 		}
 		ctx.shard = { index: options.shardIndex, count: options.shardCount }
 		this.everyTest = tests
-		return tests.filter(
-			(test) =>
-				shardFor(toRelative(ctx.repo, test.path), options.shardCount) ===
-				options.shardIndex - 1,
-		)
+		return super.shard(tests, options)
 	}
 
 	override async sort(tests: Test[]): Promise<Test[]> {

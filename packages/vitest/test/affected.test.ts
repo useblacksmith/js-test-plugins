@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { execFileSync, spawn } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
 import {
@@ -37,10 +38,25 @@ import { OWN_RECORDS_FILE, recordsNatively } from '../src/records.ts'
 const recordsFile = recordsNatively(vitestVersion)
 	? 'dependencies.json'
 	: OWN_RECORDS_FILE
-import { shardFor } from '../src/sequencer.ts'
 import { packageRoot } from './harness.ts'
 
 const vitestBin = path.join(packageRoot, 'node_modules', 'vitest', 'vitest.mjs')
+/** The test files Vitest's own sequencer gives shard `index` of `count`: sorted by a hash of the path, then cut into `count` runs of files. */
+function vitestShard(index: number, count: number, tests: readonly string[]): string[] {
+	const size = Math.floor(tests.length / count)
+	const longer = tests.length % count
+	const start = Math.min(index - 1, longer) * (size + 1) + Math.max(index - 1 - longer, 0) * size
+	return tests
+		.map((name) => ({
+			name,
+			hash: createHash('sha1').update(`/src/${name}.test.ts`).digest('hex'),
+		}))
+		.sort((a, b) => (a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0))
+		.slice(start, start + size + (index <= longer ? 1 : 0))
+		.map(({ name }) => name)
+		.sort()
+}
+
 const TESTS = [
 	'one',
 	'two',
@@ -566,11 +582,9 @@ describe('sharding', () => {
 	const SHARD_1_OF_2 = '"shard":{"index":1,"count":2}'
 	const SHARD_2_OF_2 = '"shard":{"index":2,"count":2}'
 	const owned = (index: number, count: number) =>
-		TESTS.filter(
-			(name) => shardFor(`src/${name}.test.ts`, count) === index - 1,
-		).sort()
+		vitestShard(index, count, TESTS)
 
-	test('shards partition by path hash', async () => {
+	test("shards are Vitest's own, over every test file", async () => {
 		const one = await repo.run('--shard=1/2')
 		const two = await repo.run('--shard=2/2')
 		expect(one.ran).toEqual(owned(1, 2))
@@ -2014,9 +2028,7 @@ describe('hygiene: lockfiles, dependency globs and record growth', () => {
 
 	test('files other runs recorded after a shard snapshot are not changes; a manifest created since still is', async () => {
 		const repo = new Repo('shard-growth')
-		const owned = TESTS.filter(
-			(name) => shardFor(`src/${name}.test.ts`, 2) === 0,
-		).sort()
+		const owned = vitestShard(1, 2, TESTS)
 		expect((await repo.run('--shard=1/2')).ran).toEqual(owned)
 		// The unsharded run records the other shard's tests and anchors the
 		// package.json above them; shard 1's snapshot never saw those paths.
@@ -2034,7 +2046,8 @@ describe('hygiene: lockfiles, dependency globs and record growth', () => {
 		expect(manifest.output).toContain(
 			'1 files changed since',
 		)
-		expect(manifest.output).toContain('1 test files under a changed manifest')
+		// However many of the shard's test files loaded something below it.
+		expect(manifest.output).toMatch(/[1-9]\d* test files under a changed manifest/)
 		// Vitest's own resolver reruns the rest on a new package.json; ours selected one.test.ts.
 		expect(manifest.ran).toContain('one')
 	})

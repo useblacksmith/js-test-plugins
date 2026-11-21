@@ -41,8 +41,8 @@ and `--shard` are supported. Requires Node 22.15 or newer and Jest 29 or newer.
   when the record was made, so files git ignores (`dist/`) work too.
 - **`-t`.** A run with `--testNamePattern` runs part of a test file. After a
   change the file stays selected until a run without the pattern passes.
-- **Shards.** `--shard` assigns test files by a hash of their path, so a new
-  test file moves no other file to another shard. Each shard saves a record of
+- **Shards.** `--shard` assigns test files as Jest does without the plugin,
+  over every test file and before any is left out. Each shard saves a record of
   its own to the Actions cache and looks up the records of all shards, so
   changing the shard count reruns nothing.
 
