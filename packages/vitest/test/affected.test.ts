@@ -2055,3 +2055,87 @@ describe('browser mode', () => {
 		expect((await repo.run('--changed')).ran).toEqual([])
 	})
 })
+
+describe('files of installed packages read one after another', () => {
+	const repo = new Repo('package-reads')
+	const installed = (name: string, version: string) =>
+		repo.write(
+			`node_modules/${name}/package.json`,
+			`${JSON.stringify({ name, version })}\n`,
+		)
+	/** A test file that reads a file of `pkg-a`, `then` below `node_modules`, and `pkg-a` again, by absolute path. */
+	const reader = (name: string, then: string) =>
+		repo.write(
+			`src/${name}.test.ts`,
+			`import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { expect, test } from 'vitest'
+
+const at = (file: string) => path.resolve('node_modules') + '/' + file
+
+test('${name}', () => {
+	readFileSync(at('pkg-a/one.txt'))
+	expect(readFileSync(at(${JSON.stringify(then)}), 'utf8')).toBe('data\\n')
+	// The last read of every test file, so the next one starts in the same package.
+	readFileSync(at('pkg-a/two.txt'))
+})
+`,
+		)
+	/** What an install does: a new version in node_modules and a changed lockfile. */
+	const bump = async (name: string) => {
+		installed(name, '1.1.0')
+		repo.write(
+			'package-lock.json',
+			`{ "name": "fixture-affected", "lockfileVersion": 3, "bumped": "${name}" }\n`,
+		)
+		repo.commit(`bump ${name}`)
+		return (await repo.run('--changed')).ran
+	}
+	const READERS = ['reads-dots', 'reads-nested', 'reads-own', 'reads-sibling']
+
+	beforeAll(async () => {
+		// The readers run alone below: with the others run first, nothing reads between them.
+		expect((await repo.run()).exitCode).toBe(0)
+		for (const name of [
+			'pkg-a',
+			'pkg-a/node_modules/pkg-b',
+			'pkg-ab',
+			'pkg-c',
+		]) {
+			installed(name, '1.0.0')
+			repo.write(`node_modules/${name}/data.txt`, 'data\n')
+		}
+		repo.write('node_modules/pkg-a/one.txt', 'one\n')
+		repo.write('node_modules/pkg-a/two.txt', 'two\n')
+		repo.write('node_modules/pkg-a/sub/three.txt', 'three\n')
+		reader('reads-own', 'pkg-a/data.txt')
+		reader('reads-nested', 'pkg-a/node_modules/pkg-b/data.txt')
+		reader('reads-sibling', 'pkg-ab/data.txt')
+		reader('reads-dots', 'pkg-a/sub/../../pkg-c/data.txt')
+		repo.commit('read packages')
+		// One worker for all: each test file starts where the last one stopped.
+		const run = await repo.run(
+			'--changed',
+			'--no-isolate',
+			'--no-file-parallelism',
+		)
+		expect(run.exitCode, run.output).toBe(0)
+		expect(run.ran).toEqual(READERS)
+	})
+
+	test('every test file that read the package reruns with it, also one that ran after another in the same worker', async () => {
+		expect(await bump('pkg-a')).toEqual(READERS)
+	})
+
+	test('a package installed inside the one read before it is its own package', async () => {
+		expect(await bump('pkg-a/node_modules/pkg-b')).toEqual(['reads-nested'])
+	})
+
+	test('so is one whose name starts with the name of the one read before it', async () => {
+		expect(await bump('pkg-ab')).toEqual(['reads-sibling'])
+	})
+
+	test('and one reached through `..` from the one read before it', async () => {
+		expect(await bump('pkg-c')).toEqual(['reads-dots'])
+	})
+})
