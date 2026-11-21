@@ -39,8 +39,13 @@ interface Units {
 export const unitsFile = (ctx: State, shard: Shard | null): string =>
 	path.join(dataDir(ctx.cwd), `units${suffix(shard)}.json`)
 
-function readUnits(ctx: State, shard: Shard | null, records: Records | null): Units | null {
-	const units = loadUnits(readJson<StoredUnits | LegacyUnits>(unitsFile(ctx, shard)))
+function readUnits(
+	ctx: State,
+	shard: Shard | null,
+	records: Records | null,
+	file = unitsFile(ctx, shard),
+): Units | null {
+	const units = loadUnits(readJson<StoredUnits | LegacyUnits>(file))
 	if (!units || !records || units.at !== records.at) return null
 	return units
 }
@@ -138,8 +143,10 @@ export function affecting(
 	shard: Shard | null,
 	records: Records,
 	changed: string[],
+	/** The function record, when it is not the data directory's: a restored cache entry's. */
+	file?: string,
 ): Affects | undefined {
-	const units = readUnits(ctx, shard, records)
+	const units = readUnits(ctx, shard, records, file)
 	if (!units) return undefined
 	const current = new Map<string, ResolvedDigest | null>()
 	for (const file of changed) {
@@ -241,6 +248,54 @@ export function updateUnits(
 	}
 	units.at = records.at
 	writeFileSync(unitsFile(ctx, shard), JSON.stringify(storeUnits(units)))
+}
+
+/**
+ * Writes the function record that goes with `records`, which was put
+ * together from several cache entries: what each test file entered comes
+ * from the entry its record came from. A module two entries saw differently
+ * is left out, and its digest is taken again after the run.
+ */
+export function mergeUnits(
+	ctx: State,
+	shard: Shard | null,
+	records: Records,
+	sources: ReadonlyArray<{ records: Records; units: string; specs: Iterable<string> }>,
+): void {
+	const merged: Units = {
+		version: UNITS_VERSION,
+		at: records.at,
+		digests: DIGESTS,
+		modules: {},
+		hashes: {},
+		tests: {},
+	}
+	const differs = new Set<string>()
+	let any = false
+	for (const source of sources) {
+		const units = readUnits(ctx, shard, source.records, source.units)
+		if (!units || units.digests !== DIGESTS) continue
+		any = true
+		for (const spec of source.specs) {
+			const entered = units.tests[spec]
+			if (entered && records.files[spec]) merged.tests[spec] = entered
+		}
+		for (const [module, digest] of Object.entries(units.modules)) {
+			const hash = units.hashes[module]
+			if (hash === undefined || differs.has(module)) continue
+			const known = merged.hashes[module]
+			if (known === undefined) {
+				merged.modules[module] = digest
+				merged.hashes[module] = hash
+			} else if (known !== hash) {
+				differs.add(module)
+				delete merged.modules[module]
+				delete merged.hashes[module]
+			}
+		}
+	}
+	if (!any) return dropUnits(ctx, shard)
+	writeFileSync(unitsFile(ctx, shard), JSON.stringify(storeUnits(merged)))
 }
 
 /** A run without `narrow` leaves no function record: the one before it is not of the tests it ran. */

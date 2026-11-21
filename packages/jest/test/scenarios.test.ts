@@ -21,10 +21,15 @@ const driver: Driver = {
 	config: (plugin) => ({
 		'jest.config.js': `const { withBlacksmith } = require(${JSON.stringify(plugin)})\nmodule.exports = withBlacksmith({ watchman: false })\n`,
 	}),
+	mergesShards: true,
 	command: (project, report) => [
 		path.join(project.cwd, 'node_modules', 'jest', 'bin', 'jest.js'),
 		'--json',
 		`--outputFile=${report}`,
+		// A shard of the three test files may own none.
+		...(project.shard
+			? [`--shard=${project.shard}`, '--passWithNoTests']
+			: []),
 	],
 	files: (report) =>
 		(report as { testResults: { name: string }[] }).testResults.map(

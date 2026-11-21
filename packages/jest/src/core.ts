@@ -7,7 +7,7 @@ import { isPackagePath } from '../../shared/src/packages.ts'
  * file a module registry of its own, so the record is one dependency list per
  * test file, with the state of each of its tests beside it.
  */
-export const RECORDS_VERSION = 5
+export const RECORDS_VERSION = 6
 
 export type TestState = 'passed' | 'failed' | 'skipped'
 
@@ -20,6 +20,8 @@ export interface FileRecord {
 	manifests?: string[]
 	/** The file failed outside any test: a syntax error, a failed `beforeAll`. */
 	failed?: boolean
+	/** When the file last ran, in milliseconds: of the cache entries that hold a record of it, the one with the latest run is used. */
+	at?: number
 }
 
 /** What one Jest run recorded. Paths are repository-relative with `/`. */
@@ -118,6 +120,12 @@ export type Affects = (spec: string, file: string) => boolean
 export interface Options {
 	/** Test file glob → globs of files those test files depend on that nothing reads. */
 	dependencies?: Record<string, string | string[]>
+	/**
+	 * The largest shard count (`--shard=i/N`) accepted, 20 by default; a run
+	 * split further fails. Each shard looks in the Actions cache for the record
+	 * of every shard up to this number.
+	 */
+	maxShards?: number
 }
 
 export type Decision = { run: false } | { run: true; reason: string }
@@ -237,8 +245,8 @@ export function mergeRecords(
 	}
 	for (const [spec, entry] of Object.entries(run.files)) {
 		const previous = out.files[spec]
-		if (!run.partial) out.files[spec] = entry
-		else if (!previous) out.files[spec] = { ...entry, failed: true }
+		if (!run.partial) out.files[spec] = { ...entry, at: run.at }
+		else if (!previous) out.files[spec] = { ...entry, failed: true, at: run.at }
 		else {
 			out.files[spec] = {
 				deps: union(previous.deps, entry.deps),
@@ -247,6 +255,7 @@ export function mergeRecords(
 					: {}),
 				tests: { ...previous.tests, ...entry.tests },
 				...(entry.failed || previous.failed ? { failed: true } : {}),
+				at: run.at,
 			}
 		}
 	}

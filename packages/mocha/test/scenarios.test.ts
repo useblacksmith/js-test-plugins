@@ -35,6 +35,7 @@ const driver: Driver = {
 		return [
 			cli,
 			'run',
+			...(project.shard ? ['--shard', project.shard] : []),
 			'--',
 			'test/*.test.js',
 			'--reporter',
