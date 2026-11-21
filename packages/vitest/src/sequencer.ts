@@ -1,3 +1,4 @@
+import path from 'node:path'
 import {
 	type ResolvedConfig,
 	type TestSpecification,
@@ -79,10 +80,13 @@ export async function shardOwner(
 		projects.add(specification.project.name)
 		owned.set(specification.moduleId, projects)
 	}
-	const owns: Owns = (moduleId, project) =>
-		project === undefined
-			? owned.has(moduleId)
-			: owned.get(moduleId)?.has(project) === true
+	// Vitest names a test file with `/` on every platform; a path resolved here has `\\` on Windows.
+	const owns: Owns = (moduleId, project) => {
+		const projects = owned.get(moduleId.split(path.sep).join('/'))
+		return project === undefined
+			? projects !== undefined
+			: projects?.has(project) === true
+	}
 	ownedBy.set(vitest, { listed, owns })
 	return owns
 }
