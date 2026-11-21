@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { after, before, describe, test } from 'node:test'
 
 import { coverageFlag } from '../src/index.ts'
+import { projectName } from '../src/state.ts'
 import { Repo } from './harness.ts'
 
 const ALL = ['add', 'capped', 'double', 'shout']
@@ -98,6 +99,17 @@ test('the command line turns off coverage the config turns on', () => {
 	assert.equal(coverageFlag(['--coverage', '--no-coverage']), false)
 	assert.equal(coverageFlag(['--no-coverage', '--coverage']), true)
 	assert.equal(coverageFlag(['--runInBand']), undefined)
+})
+
+test('two projects without a name on one rootDir have a name each', () => {
+	const a = projectName({ id: 'one', rootDir: '/repo' }, '/repo')
+	const b = projectName({ id: 'two', rootDir: '/repo' }, '/repo')
+	assert.notEqual(a, b)
+	assert.equal(projectName({ displayName: 'unit', id: 'one' }, '/repo'), 'unit')
+	assert.equal(
+		projectName({ displayName: { name: 'unit' }, id: 'one' }, '/repo'),
+		'unit',
+	)
 })
 
 describe('a test file two projects run', () => {

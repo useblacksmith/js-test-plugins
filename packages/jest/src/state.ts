@@ -65,16 +65,25 @@ export interface State {
 	shared: Set<string>
 }
 
-/** A project's name in the record: its `displayName`, or its `rootDir` from the repository. */
+/**
+ * A project's name in the record: its `displayName`, or the id Jest gives it.
+ * Projects without a name often share a `rootDir`; the id is one per project,
+ * made from the `rootDir`, the config's path and the project's position.
+ */
 export function projectName(
 	config:
-		| { displayName?: string | { name?: string }; rootDir?: string }
+		| {
+				displayName?: string | { name?: string }
+				id?: string
+				rootDir?: string
+		  }
 		| undefined,
 	repo: string,
 ): string {
 	const named = config?.displayName
 	const name = typeof named === 'string' ? named : named?.name
 	if (name) return name
+	if (config?.id) return config.id
 	return path
 		.relative(repo, config?.rootDir ?? repo)
 		.split(path.sep)
