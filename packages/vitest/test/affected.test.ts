@@ -1628,6 +1628,8 @@ describe('the dependency record travels through the Actions cache', () => {
 		const failing = new Repo('left-failing')
 		failing.env = { ...env, BLACKSMITH_FLAKY: '1' }
 		flaky(failing, 'fails')
+		// Its own commit, so its entry is not named as one saved in the same second.
+		failing.commit('fails')
 		const failed = await failing.run('--changed', `--shard=${owner}`)
 		expect(failed.ran).toEqual(['flaky'])
 		expect(failed.exitCode).toBe(1)
