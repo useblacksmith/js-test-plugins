@@ -462,6 +462,20 @@ describe('narrow: module digests', () => {
 			['function patch() { const { constructor: e } = []; e.from = c }', "['b'].map((b) => b)"],
 			['function patch() { c([].constructor) }', "['b'].map((b) => b)"],
 			['function patch(d: string) { Reflect.get([], d).map = c }', "['b'].map((b) => b)"],
+			// One of those names as a string, a reader of keys by a string, and what holds every builtin.
+			["function patch() { Object.getOwnPropertyDescriptor([], '__proto__').get.call([]).map = c }", "['b'].map((b) => b)"],
+			["function patch(d: string) { Object.getOwnPropertyDescriptor(c, d).value.map = c }", "['b'].map((b) => b)"],
+			["function patch() { c([], `prototype`) }", "['b'].map((b) => b)"],
+			["function patch() { ([] as any).__lookupGetter__(c).call([]).map = c }", "['b'].map((b) => b)"],
+			["function patch() { Object.getOwnPropertyDescriptor(globalThis, 'Array') }", "['b'].map((b) => b)"],
+			['function patch() { c(globalThis) }', "['b'].map((b) => b)"],
+			['function patch() { c(window) }', "['b'].map((b) => b)"],
+			['function patch() { c(window.Array) }', "['b'].map((b) => b)"],
+			['function patch() { c(window.top) }', "['b'].map((b) => b)"],
+			["function patch() { c(self['Array']) }", "['b'].map((b) => b)"],
+			['function patch() { const { Array: d } = c(); c(d) }', "['b'].map((b) => b)"],
+			['function patch() { c(document.defaultView) }', "['b'].map((b) => b)"],
+			['const d = window', "['b'].map((b) => b)"],
 			['function fixed(b: string) { const d = b; d = b; return d }', 'fixed(P.b)'],
 			['@c class C {}', 'Object.values(P)'],
 			['export default c()', 'Object.values(P)'],
@@ -470,7 +484,7 @@ describe('narrow: module digests', () => {
 			expect(read(code, before), `${before}; ${code}`).toBe(true)
 		}
 		// What only declares, or reads, leaves it as written.
-		for (const before of ['function c(d: Object): Object { return d as Object }', 'class C { constructor() {} }', "const M = { constructor: 1, d: 'caf\\u00e9' }", 'const M = [1][0]', 'type T = Record<string, Object>', "import type { Object } from './c.ts'", 'function c() { return Object.freeze({ Object: 1 }) }', 'function c() { P.b = 1 }', 'const M = () => c(P)', 'const M = P.d', 'type T = typeof P', 'export { P }']) {
+		for (const before of ['function c(d: Object): Object { return d as Object }', 'class C { constructor() {} }', "const M = { constructor: 1, d: 'caf\\u00e9' }", "const M = { self: 1, 'prototype': 2, d: 'a window, by itself' }", 'function self() { return 1 }', "const M = typeof window === 'undefined' ? 'global' : 'self'", 'function d() { return window.location.href }', "function d() { window.addEventListener('b', () => {}) }", 'const M = [1][0]', 'type T = Record<string, Object>', "import type { Object } from './c.ts'", 'function c() { return Object.freeze({ Object: 1 }) }', 'function c() { P.b = 1 }', 'const M = () => c(P)', 'const M = P.d', 'type T = typeof P', 'export { P }']) {
 			expect(read('Object.values(P)', before), before).toBeUndefined()
 		}
 		// A name of the module's own is not the language's.

@@ -298,39 +298,75 @@ function effects(node: Node | null | undefined, scope: Module): boolean {
 	return false
 }
 
-/** The names that lead from a value to what holds its methods, or to code made from a string. */
-const REACH = new Set(['prototype', '__proto__', 'constructor', 'getPrototypeOf', 'setPrototypeOf', 'Reflect', 'Function', 'eval'])
+/** The keys that lead from a value to what holds its methods. */
+const PATHS = new Set(['prototype', '__proto__', 'constructor'])
+
+/** The names that lead there, to a builtin by a key, or to code made from a string. */
+const REACH = new Set([
+	...PATHS,
+	'getPrototypeOf',
+	'setPrototypeOf',
+	'getOwnPropertyDescriptor',
+	'getOwnPropertyDescriptors',
+	'__lookupGetter__',
+	'__lookupSetter__',
+	'__defineGetter__',
+	'__defineSetter__',
+	'defaultView',
+	'Reflect',
+	'Function',
+	'eval',
+])
+
+/** The builtins whose methods a value is told by, which a key may name as well. */
+const BUILTINS = new Set(['Array', 'Object', 'String', 'Number', 'Boolean', 'Set', 'Map'])
+
+/** The names of what holds every builtin, and the keys of it that are itself again. */
+const HOLDERS = new Set(['globalThis', 'global', 'window', 'self'])
+const ITSELF = new Set([...HOLDERS, 'top', 'parent', 'frames'])
 
 /**
  * Whether `node` has a way to what holds the language's own methods other than
- * by the name of a builtin: one of the names above, or a key that is worked out
- * as it runs and so may be one of them.
+ * by the name of a builtin: one of the names above, a key that is worked out as
+ * it runs and so may be one of them, or what holds every builtin used for more
+ * than reading a key of its own off it.
  */
-function reaches(node: Node | null | undefined): boolean {
+function reaches(node: Node | null | undefined, own: (name: string) => boolean): boolean {
 	if (!node || typeof node !== 'object') return false
-	if (Array.isArray(node)) return node.some(reaches)
+	if (Array.isArray(node)) return node.some((child) => reaches(child, own))
 	if (typeof node.type !== 'string') return false
 	if (node.type === 'WithStatement') return true
-	if (node.type === 'Identifier') return REACH.has(node.name)
+	// A name the module declares for itself is not what holds every builtin.
+	if (node.type === 'Identifier') return REACH.has(node.name) || (HOLDERS.has(node.name) && !own(node.name))
+	// One of the keys as a string may be handed to what reads a key by it.
+	if (node.type === 'Literal') return typeof node.value === 'string' && PATHS.has(node.value)
+	if (node.type === 'TemplateElement') return PATHS.has(node.value?.cooked)
 	// A type runs nothing.
 	if ((node.type.startsWith('TS') && !VALUE_TS.has(node.type)) || node.importKind === 'type' || node.exportKind === 'type') {
 		return false
 	}
+	// Asking what kind of thing a name is hands nothing on.
+	if (node.type === 'UnaryExpression' && node.operator === 'typeof' && node.argument?.type === 'Identifier') {
+		return REACH.has(node.argument.name)
+	}
 	// A key that is read: of a value, or of what is taken apart. One that a class or an object literal declares is its own.
 	const reads: Node[] = node.type === 'MemberExpression' ? [node] : node.type === 'ObjectPattern' ? node.properties : []
+	const held = node.type === 'MemberExpression' && node.object?.type === 'Identifier' && HOLDERS.has(node.object.name) && !own(node.object.name)
 	for (const read of reads) {
 		const key: Node | undefined = read.type === 'MemberExpression' ? read.property : read.key
 		if (!key) continue
-		if (read.computed ? key.type !== 'Literal' || REACH.has(key.value) : REACH.has(key.name ?? key.value)) return true
+		if (read.computed && key.type !== 'Literal') return true
+		const name = read.computed ? key.value : (key.name ?? key.value)
+		if (REACH.has(name) || BUILTINS.has(name) || (held && ITSELF.has(name))) return true
 	}
-	if (node.type === 'MemberExpression') return reaches(node.object)
+	if (node.type === 'MemberExpression') return !held && reaches(node.object, own)
 	for (const key in node) {
 		if (key === 'type' || key === 'start' || key === 'end') continue
 		// The name of a key is not the name of a value.
 		if (key === 'key' && !node.computed) continue
 		if (key === 'typeAnnotation' || key === 'typeArguments' || key === 'typeParameters' || key === 'returnType') continue
 		const child = node[key]
-		if (child && typeof child === 'object' && reaches(child)) return true
+		if (child && typeof child === 'object' && reaches(child, own)) return true
 	}
 	return false
 }
@@ -355,7 +391,7 @@ function loud(program: Node, own: (name: string) => boolean, code: string): Set<
 		fns: new Map(),
 		// A method replaced there runs wherever the language calls it itself. Looked for when a call is first asked about.
 		get patched() {
-			return (reached ??= reaches(program))
+			return (reached ??= reaches(program, own))
 		},
 		root: new Scope(),
 		budget: { left: 20000 },
