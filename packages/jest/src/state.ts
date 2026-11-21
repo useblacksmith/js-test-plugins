@@ -41,6 +41,8 @@ export interface Pending {
 	selection: Record<string, Decision>
 	/** Whether a changed file a test file loaded changed anything for it; absent when changes are not looked into. */
 	affects?: Affects | undefined
+	/** The stored record was put together from several cache entries, each already rid of what `changed` staled for it. */
+	settled?: boolean
 }
 
 /** Shared by the config helper, the sequencer and the reporter, which Jest loads into its main process one by one. */

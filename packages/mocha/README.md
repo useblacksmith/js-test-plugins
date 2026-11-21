@@ -69,6 +69,11 @@ or the workflow file run everything.
 file stays in its shard when other files are added or skipped. With
 `.mocharc.cjs`, set `BLACKSMITH_MOCHA_SHARD=<i>/<n>`.
 
+Each shard saves a record of its own to the Actions cache and looks up the
+records of all shards, so changing the shard count reruns nothing. A count
+above `maxShards` in `blacksmith-mocha.json`, 20 by default, fails: a shard
+looks up the records of that many shards.
+
 If you split tests yourself, read `affected --json` to build your own list.
 When several jobs each run part of the same spec files, run them with
 `--no-commit` and `BLACKSMITH_MOCHA_RUN=<file>`, collect the files, and merge

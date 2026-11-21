@@ -103,7 +103,9 @@ class Repo {
 		this.git('init', '-q', '-b', 'main')
 		this.git('config', 'user.email', 'ci@example.com')
 		this.git('config', 'user.name', 'ci')
-		this.commit('initial')
+		// Named, so two repositories made in the same second are not one commit
+		// to the cache, which names its entries by it.
+		this.commit(`initial ${name}`)
 		repos.push(this)
 	}
 

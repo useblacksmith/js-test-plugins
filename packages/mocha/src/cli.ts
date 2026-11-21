@@ -7,8 +7,17 @@ import {
 } from '../../shared/src/packages.ts'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs'
 import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -34,6 +43,7 @@ import {
 import { shardFor } from '../../shared/src/shard.ts'
 import {
 	RECORDS_VERSION,
+	emptyRecords,
 	mergeRecords,
 	recordedPaths,
 	ruleGlobs,
@@ -41,6 +51,7 @@ import {
 	type Decision,
 	type Options,
 	type Records,
+	type SpecRecord,
 	type RunRecord,
 	loadRecords,
 	storeRecords,
@@ -92,6 +103,8 @@ interface Pending {
 	owned: string[]
 	changed: string[]
 	selection: Record<string, Decision>
+	/** The stored record already lost what `changed` invalidates: it came from several cache entries, each compared with its own anchor. */
+	settled?: boolean
 }
 
 interface Context {
@@ -244,7 +257,8 @@ async function currentTree(
 
 function cacheKey(
 	{ cwd, repo }: Context,
-	shard: Shard | null,
+	/** The shard's number, 0 for a run without `--shard`: a run on another count finds every entry. */
+	index: number,
 	head: string,
 ): CacheKey {
 	const job = `${workflowPath() ?? ''}#${process.env.GITHUB_JOB ?? ''}`
@@ -253,7 +267,7 @@ function cacheKey(
 		.digest('hex')
 		.slice(0, 12)
 	const runtime = `node${process.versions.node.split('.')[0]}-${process.platform}-${process.arch}`
-	const prefix = `blacksmith-mocha-v${RECORDS_VERSION}-${runtime}-${scope}-${shard ? `${shard.index}of${shard.count}` : '1of1'}-`
+	const prefix = `blacksmith-mocha-v${RECORDS_VERSION}-${runtime}-${scope}-shard${index}-`
 	return { key: `${prefix}${head}`, prefix }
 }
 
@@ -263,29 +277,212 @@ const FORMAT: BundleFormat = {
 	travels: (name) => TRAVELS.test(name),
 }
 
-/** Pulls the newest record for this shard from the Actions cache when the data directory holds none. Never fails the run. */
-async function restore(ctx: Context, shard: Shard | null): Promise<void> {
-	const base = process.env[ENV_CACHE_URL]
-	if (!base || !cacheMode().readable) return
-	if (existsSync(path.join(ctx.dir, `records${suffix(shard)}.json`))) return
-	try {
-		const key = cacheKey(ctx, shard, await headSha(ctx.repo))
-		const outcome = await restoreBundle(base, ctx.dir, key, FORMAT)
-		log(
-			outcome.restored
-				? `restored dependency cache ${outcome.key}`
-				: `no dependency cache: ${outcome.reason}`,
+/** What `maxShards` is when the options leave it out. */
+const DEFAULT_MAX_SHARDS = 20
+const RESTORES_AT_ONCE = 20
+
+/** One restored cache entry: its record and the tree it was saved against. */
+interface Entry {
+	key: string
+	records: Records
+	anchor: Anchor
+}
+
+async function pooled<T, R>(
+	items: readonly T[],
+	atOnce: number,
+	work: (item: T) => Promise<R>,
+): Promise<R[]> {
+	const results: R[] = []
+	let next = 0
+	await Promise.all(
+		Array.from({ length: Math.min(atOnce, items.length) }, async () => {
+			while (next < items.length) {
+				const at = next++
+				results[at] = await work(items[at] as T)
+			}
+		}),
+	)
+	return results
+}
+
+/** The record of shard `index` among the files a bundle brought to `dir`: the data directory may have held those of other shards too. */
+function entryIn(dir: string, index: number, key: string): Entry | null {
+	const named =
+		index === 0 ? /^records\.json$/ : new RegExp(`^records\\.${index}of\\d+\\.json$`)
+	let found: Entry | null = null
+	for (const name of readdirSync(dir)) {
+		if (!named.test(name)) continue
+		const records = loadRecords(
+			readJson<StoredRecords | Records>(path.join(dir, name)),
 		)
-	} catch (error) {
-		log(`dependency cache not restored: ${error instanceof Error ? error.message : String(error)}`)
+		const anchor = readJson<Anchor>(
+			path.join(dir, name.replace(/^records/, 'anchor')),
+		)
+		if (records?.version !== RECORDS_VERSION || !anchor?.tree) continue
+		if (found !== null && found.records.at >= records.at) continue
+		found = { key, records, anchor }
 	}
+	return found
+}
+
+/**
+ * Pulls the newest record of every shard from the Actions cache when the
+ * data directory holds none: a spec file another shard ran last has its
+ * record there. Never fails the run.
+ */
+async function restore(ctx: Context, shard: Shard | null): Promise<Entry[]> {
+	const base = process.env[ENV_CACHE_URL]
+	if (!base || !cacheMode().readable) return []
+	// Both, or the record is what `affected` merged from the entries, each compared with its own anchor: the next command merges them again.
+	if (
+		existsSync(path.join(ctx.dir, `records${suffix(shard)}.json`)) &&
+		existsSync(path.join(ctx.dir, `anchor${suffix(shard)}.json`))
+	) {
+		return []
+	}
+	const own = shard?.index ?? 0
+	let failure: string | null = null
+	const explain = (error: unknown): string =>
+		error instanceof Error ? error.message : String(error)
+	let head: string
+	try {
+		head = await headSha(ctx.repo)
+	} catch (error) {
+		log(`dependency cache not restored: ${explain(error)}`)
+		return []
+	}
+	const fetched = await pooled(
+		Array.from(
+			{ length: Math.max(ctx.options.maxShards ?? DEFAULT_MAX_SHARDS, own) + 1 },
+			(_, at) => at,
+		),
+		RESTORES_AT_ONCE,
+		async (index) => {
+			const dir = mkdtempSync(path.join(tmpdir(), 'blacksmith-mocha-entry-'))
+			try {
+				const outcome = await restoreBundle(
+					base,
+					dir,
+					cacheKey(ctx, index, head),
+					FORMAT,
+				)
+				const entry = outcome.restored ? entryIn(dir, index, outcome.key) : null
+				return entry ? { index, entry } : null
+			} catch (error) {
+				failure = explain(error)
+				return null
+			} finally {
+				rmSync(dir, { recursive: true, force: true })
+			}
+		},
+	)
+	// The shard's own entry first: of two records of a spec file as late as each other, its own is used.
+	const found = fetched
+		.filter((entry) => entry !== null)
+		.sort((a, b) => Number(b.index === own) - Number(a.index === own))
+		.map(({ entry }) => entry)
+	if (found.length === 0) {
+		log(
+			failure === null
+				? `no dependency cache: no entry under ${cacheKey(ctx, own, head).prefix}`
+				: `dependency cache not restored: ${failure}`,
+		)
+	}
+	for (const entry of found) log(`restored dependency cache ${entry.key}`)
+	return found
+}
+
+/**
+ * The decision when the records come from cache entries. Each spec file is
+ * taken from the entry that ran it last, and that entry decides for it
+ * against its own anchor, as a run restoring it alone would. What is left of
+ * them all becomes the stored record: every spec file nothing changed for,
+ * this shard's and the others'.
+ */
+async function fromEntries(
+	ctx: Context,
+	entries: readonly Entry[],
+	owned: string[],
+	shard: Shard | null,
+): Promise<Pick<Pending, 'changed' | 'selection'>> {
+	const from = new Map<string, { time: number; entry: Entry }>()
+	for (const entry of entries) {
+		for (const [spec, record] of Object.entries(entry.records.files)) {
+			const time = record.at ?? 0
+			const known = from.get(spec)
+			if (known === undefined || time > known.time) from.set(spec, { time, entry })
+		}
+	}
+	const selection: Record<string, Decision> = Object.fromEntries(
+		owned.map((spec) => [spec, { run: true, reason: 'no record' }]),
+	)
+	const mine = new Set(owned)
+	const always = new Set(alwaysPaths(ctx))
+	const changed = new Set<string>()
+	const merged = emptyRecords()
+	for (const entry of entries) {
+		const specs = [...from]
+			.filter(([, taken]) => taken.entry === entry)
+			.map(([spec]) => spec)
+		if (specs.length === 0) continue
+		const records: Records = {
+			...entry.records,
+			files: Object.fromEntries(
+				specs.map((spec) => [spec, entry.records.files[spec] as SpecRecord]),
+			),
+		}
+		const recorded = recordedPaths(entry.records)
+		const differs = diffTrees(
+			entry.anchor.tree,
+			await currentTree(
+				ctx,
+				// A node_modules directory with nothing installed in it has no entry until something is.
+				[...Object.keys(entry.anchor.tree), ...[...recorded].filter(isPackagePath)],
+				recorded,
+			),
+		)
+		for (const file of differs) changed.add(file)
+		// Whatever becomes of its spec files: what every spec file depends on is not loaded again by each run.
+		merged.global = [...new Set([...merged.global, ...entry.records.global])].sort()
+		const trigger = differs.find((file) => always.has(file))
+		if (trigger !== undefined) {
+			for (const spec of specs) {
+				if (mine.has(spec)) selection[spec] = { run: true, reason: `changed: ${trigger}` }
+			}
+			continue
+		}
+		Object.assign(
+			selection,
+			select(
+				records,
+				specs.filter((spec) => mine.has(spec)),
+				differs,
+				ctx.options,
+			),
+		)
+		// Without what the changes invalidate, as a run on this entry alone would store it.
+		const kept = mergeRecords(records, [], differs, ctx.options)
+		Object.assign(merged.files, kept.files)
+		for (const [file, to] of Object.entries(kept.graph)) {
+			merged.graph[file] = [...new Set([...(merged.graph[file] ?? []), ...to])].sort()
+		}
+		merged.global = [...new Set([...merged.global, ...kept.global])].sort()
+		merged.at = Math.max(merged.at, kept.at)
+	}
+	mkdirSync(ctx.dir, { recursive: true })
+	writeFileSync(
+		path.join(ctx.dir, `records${suffix(shard)}.json`),
+		JSON.stringify(storeRecords(merged)),
+	)
+	return { changed: [...changed], selection }
 }
 
 async function save(ctx: Context, shard: Shard | null): Promise<void> {
 	const base = process.env[ENV_CACHE_URL]
 	if (!base) return
 	try {
-		const key = cacheKey(ctx, shard, await headSha(ctx.repo))
+		const key = cacheKey(ctx, shard?.index ?? 0, await headSha(ctx.repo))
 		const outcome = await saveBundle(base, ctx.dir, key, FORMAT)
 		log(
 			outcome.saved
@@ -302,11 +499,28 @@ async function affected(
 	shard: Shard | null,
 	mochaArgs: string[],
 ): Promise<Pending> {
-	await restore(ctx, shard)
+	const maxShards = ctx.options.maxShards ?? DEFAULT_MAX_SHARDS
+	if (shard && shard.count > maxShards) {
+		throw new Error(
+			`--shard ${shard.index}/${shard.count} splits the run into more than maxShards (${maxShards}) shards; raise maxShards in ${CONFIG_FILE} to at least ${shard.count}`,
+		)
+	}
+	const entries = await restore(ctx, shard)
 	const all = specFiles(ctx, mochaArgs)
 	const owned = shard
 		? all.filter((spec) => shardFor(spec, shard.count) === shard.index - 1)
 		: all
+	if (entries.length > 0) {
+		const pending: Pending = {
+			shard,
+			all,
+			owned,
+			...(await fromEntries(ctx, entries, owned, shard)),
+			settled: true,
+		}
+		writeFileSync(path.join(ctx.dir, 'pending.json'), JSON.stringify(pending))
+		return pending
+	}
 	const records = loadRecords(
 		readJson<StoredRecords | Records>(
 			path.join(ctx.dir, `records${suffix(shard)}.json`),
@@ -375,17 +589,20 @@ async function commit(ctx: Context, runFiles: string[]): Promise<void> {
 	// A changed lockfile or config is in no test's dependencies, yet stales every
 	// record: a test this run left out (`--grep`, `--bail`) keeps none.
 	const always = new Set(alwaysPaths(ctx))
-	const staleAll = pending.changed.some((file) => always.has(file))
-	const merged = mergeRecords(
-		staleAll ? null : loadRecords(readJson<StoredRecords | Records>(recordsFile)),
-		runs,
-		pending.changed,
-		ctx.options,
-	)
-	// A spec another shard owns, or one that no longer exists, is not this record's to vouch for.
+	const changed = pending.settled ? [] : pending.changed
+	const staleAll = changed.some((file) => always.has(file))
+	const before = staleAll
+		? null
+		: loadRecords(readJson<StoredRecords | Records>(recordsFile))
+	const merged = mergeRecords(before, runs, changed, ctx.options)
+	// A spec file of another shard keeps what every spec file there depended on: this run loaded its own only.
 	const owned = new Set(pending.owned)
+	if (before && Object.keys(merged.files).some((spec) => !owned.has(spec))) {
+		merged.global = [...new Set([...merged.global, ...before.global])].sort()
+	}
+	// The other shards' spec files stay, for a run on another shard count to find; one that no longer exists goes.
 	for (const spec of Object.keys(merged.files)) {
-		if (!owned.has(spec)) delete merged.files[spec]
+		if (!existsSync(path.join(ctx.repo, spec))) delete merged.files[spec]
 	}
 	const tree = await currentTree(ctx, recordedPaths(merged), recordedPaths(merged))
 	writeFileSync(recordsFile, JSON.stringify(storeRecords(merged)))

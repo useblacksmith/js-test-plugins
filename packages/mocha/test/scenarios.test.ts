@@ -16,6 +16,7 @@ const driver: Driver = {
 	source: path.join(packageRoot, 'src', 'cli.ts'),
 	cacheDir: 'node_modules/.cache/blacksmith-mocha',
 	tracksPackages: true,
+	mergesShards: true,
 	withTool: (_plugin, tool) => ({
 		'.mocharc.cjs': `require(${JSON.stringify(tool)})\nmodule.exports = {}\n`,
 	}),
@@ -35,6 +36,7 @@ const driver: Driver = {
 		return [
 			cli,
 			'run',
+			...(project.shard ? ['--shard', project.shard] : []),
 			'--',
 			'test/*.test.js',
 			'--reporter',

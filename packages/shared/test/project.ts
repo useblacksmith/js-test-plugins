@@ -29,6 +29,8 @@ export interface Driver {
 	source: string
 	/** The directory under the project that holds the plugin's record. */
 	cacheDir: string
+	/** Whether a shard reads the records of every shard, so that changing the shard count reruns nothing. */
+	mergesShards?: true
 	/** Whether a lockfile change reruns only the tests that loaded a package whose version changed. */
 	tracksPackages?: true
 	/** A config file that also loads the package `tool`, as a plugin or a transformer would be. */
@@ -142,6 +144,8 @@ export class Project {
 	readonly plugin: string
 	/** Extra environment of the next runs. */
 	env: Record<string, string> = {}
+	/** The shard the next runs are, as `<index>/<count>`; null for a run of everything. */
+	shard: string | null = null
 	/** The job the runs claim to be: cache entries are kept per job. */
 	job = `e2e-${randomUUID()}`
 	private readonly cacheUrl: string | undefined

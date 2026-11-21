@@ -9,7 +9,7 @@ import picomatch from 'picomatch'
  * keeps one import graph for the run and derives a spec's dependencies as
  * its closure, plus what each of its tests read while it ran.
  */
-export const RECORDS_VERSION = 5
+export const RECORDS_VERSION = 6
 
 export interface TestRecord {
 	state: 'passed' | 'failed' | 'pending'
@@ -144,6 +144,8 @@ export interface Options {
 	dependencies?: Record<string, string | string[]>
 	/** `host:port` a test talks to → globs of the files that define what answers there. */
 	services?: Record<string, string | string[]>
+	/** The largest `--shard` count accepted, 20 by default: a shard looks up the records of this many shards. */
+	maxShards?: number
 }
 
 export interface TestReason {
