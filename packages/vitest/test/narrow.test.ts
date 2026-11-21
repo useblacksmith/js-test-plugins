@@ -367,6 +367,16 @@ describe('narrow: module digests', () => {
 			}
 		})
 
+		test('a value that can reach the other keys makes the object one value', () => {
+			expect(digest("export const FLAGS = {\nA: 'a',\nB: () => FLAGS.A,\n}").units['FLAGS']?.keys).toBeUndefined()
+			const reads = (code: string) =>
+				digest(`import { FLAGS } from './flags.ts'\n${code}`).units['a']?.reads
+			// Called off the object, a value gets the object as `this`.
+			expect(reads('export const a = () => FLAGS.B()')).toBeUndefined()
+			expect(reads('export const a = () => FLAGS.B`text`')).toBeUndefined()
+			expect(reads('export const a = () => call(FLAGS.B)')).toEqual({ FLAGS: ['B'] })
+		})
+
 		test('a unit of an importer is told apart by the keys it reads', () => {
 			const reads = (code: string, file = 'a.ts') =>
 				digest(`import { FLAGS } from './flags.ts'\n${code}`, file).units['a']?.reads

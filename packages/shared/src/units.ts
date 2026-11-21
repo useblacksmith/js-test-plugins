@@ -354,8 +354,19 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 				else loaded.push([source, '*'])
 				break
 			}
+			case 'TaggedTemplateExpression': {
+				// `X.key()` hands `X` to what it calls as `this`, which may read any key.
+				const called = unwrap(n.tag)
+				if (called?.type === 'MemberExpression' && called.object.type === 'Identifier') {
+					ids.whole.add(called.object.name)
+				}
+				break
+			}
 			case 'CallExpression': {
 				const callee = unwrap(n.callee)
+				if (callee?.type === 'MemberExpression' && callee.object.type === 'Identifier') {
+					ids.whole.add(callee.object.name)
+				}
 				const name =
 					callee?.type === 'Identifier'
 						? callee.name
@@ -439,7 +450,7 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 	 * with a value of its own: no spread, computed key, accessor or method, and
 	 * no function that could reach the other keys through `this`.
 	 */
-	const keysOf = (value: Node | null): Draft['object'] => {
+	const keysOf = (name: string, value: Node | null): Draft['object'] => {
 		if (value?.type !== 'ObjectExpression') return undefined
 		const keys: NonNullable<Draft['object']>['keys'] = []
 		const seen = new Set<string>()
@@ -456,6 +467,8 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 			seen.add(key)
 			const ids = new Ids()
 			walk(property.value, ids)
+			// A value that mentions the object may read its other keys.
+			if (ids.has(name)) return undefined
 			keys.push({ key, start: property.value.start, end: property.value.end, ids })
 		}
 		return { start: value.start, end: value.end, keys }
@@ -469,7 +482,7 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 			drafts.push({ name, kind: 'f', start: node.start, split: fn.body.start, end: node.end, prefix, ids })
 			mark(name, fn)
 		} else {
-			const object = prefix === 'const ' ? keysOf(fn) : undefined
+			const object = prefix === 'const ' ? keysOf(name, fn) : undefined
 			drafts.push({
 				name,
 				kind: 'v',
