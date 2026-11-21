@@ -368,6 +368,10 @@ describe('narrow: module digests', () => {
 			'Array.from(c, d)',
 			'JSON.parse(c)',
 			'[c].map(async (d) => d)',
+			'JSON.stringify(c, (d, e) => f(e))',
+			"String({ toString() { return '' } })",
+			'new Set({ [Symbol.iterator]: () => c })',
+			"[c].join({ toString: () => '' })",
 		]) {
 			expect(made(code), code).toBe(true)
 		}

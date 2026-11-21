@@ -212,13 +212,13 @@ function effects(node: Node | null | undefined, own: (name: string) => boolean):
 	if (node.type === 'NewExpression') {
 		const made = unwrap(node.callee)
 		if (made?.type !== 'Identifier' || !MADE.has(made.name) || own(made.name)) return true
-		return effects(node.arguments, own)
+		return holds(node.arguments) || effects(node.arguments, own)
 	}
 	if (node.type === 'CallExpression') {
 		const callee = unwrap(node.callee)
 		const args = node.arguments as Node[]
 		if (callee?.type === 'Identifier') {
-			return !CALLED.has(callee.name) || own(callee.name) || args.some((arg) => effects(arg, own))
+			return !CALLED.has(callee.name) || own(callee.name) || args.some((arg) => holds(arg) || effects(arg, own))
 		}
 		if (callee?.type !== 'MemberExpression' || callee.computed || callee.property.type !== 'Identifier') return true
 		const method = callee.property.name as string
@@ -228,10 +228,10 @@ function effects(node: Node | null | undefined, own: (name: string) => boolean):
 			if (methods !== true && !methods.has(method)) return true
 			// `Array.from(x, fn)` calls `fn`.
 			const takes = object.name === 'Array' && method === 'from'
-			return args.some((arg, index) => (takes && index > 0 ? called(arg, own) : effects(arg, own)))
+			return args.some((arg, index) => (takes && index > 0 ? called(arg, own) : holds(arg) || effects(arg, own)))
 		}
 		if (!METHODS.has(method) || !builtin(object, own)) return true
-		return effects(object, own) || args.some((arg) => (CALLING.has(method) ? called(arg, own) : effects(arg, own)))
+		return effects(object, own) || args.some((arg) => (CALLING.has(method) ? called(arg, own) : holds(arg) || effects(arg, own)))
 	}
 	// A decorator runs as the class is made, whatever it is on.
 	if (node.type === 'MethodDefinition') {
@@ -249,6 +249,20 @@ function effects(node: Node | null | undefined, own: (name: string) => boolean):
 		if (key === 'typeAnnotation' || key === 'typeArguments' || key === 'typeParameters') continue
 		const child = node[key]
 		if (child && typeof child === 'object' && effects(child, own)) return true
+	}
+	return false
+}
+
+/** Whether a function is written in `node`: what the language is handed may call it (`toString`, a replacer, an iterator). */
+function holds(node: Node | null | undefined): boolean {
+	if (!node || typeof node !== 'object') return false
+	if (Array.isArray(node)) return node.some(holds)
+	if (typeof node.type !== 'string') return false
+	if (isFunction(node) || node.type === 'ClassExpression') return true
+	for (const key in node) {
+		if (key === 'type' || key === 'start' || key === 'end') continue
+		const child = node[key]
+		if (child && typeof child === 'object' && holds(child)) return true
 	}
 	return false
 }
