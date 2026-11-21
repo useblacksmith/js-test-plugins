@@ -315,7 +315,7 @@ async function readRecords(
 	}
 }
 
-/** Recorded test file → the files it was seen importing, both absolute; empty when vitest has no records yet. */
+/** Recorded test file (as Vitest names it) → the files it was seen importing, both absolute; empty when vitest has no records yet. */
 async function recordedDependencies(
 	vitest: Vitest,
 	dir: string,
@@ -328,7 +328,8 @@ async function recordedDependencies(
 		const root = vitest.config.root
 		for (const [test, record] of Object.entries(project.files)) {
 			// A test file two projects share keeps the dependencies of both.
-			const file = path.resolve(root, test)
+			// Named as Vitest names it in a specification, with `/` on every platform.
+			const file = path.resolve(root, test).split(path.sep).join('/')
 			const deps = result.get(file) ?? new Set<string>()
 			for (const index of record.deps) {
 				deps.add(path.resolve(root, project.modules[index] ?? ''))
