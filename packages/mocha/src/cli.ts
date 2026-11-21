@@ -334,7 +334,13 @@ function entryIn(dir: string, index: number, key: string): Entry | null {
 async function restore(ctx: Context, shard: Shard | null): Promise<Entry[]> {
 	const base = process.env[ENV_CACHE_URL]
 	if (!base || !cacheMode().readable) return []
-	if (existsSync(path.join(ctx.dir, `records${suffix(shard)}.json`))) return []
+	// Both, or the record is what `affected` merged from the entries, each compared with its own anchor: the next command merges them again.
+	if (
+		existsSync(path.join(ctx.dir, `records${suffix(shard)}.json`)) &&
+		existsSync(path.join(ctx.dir, `anchor${suffix(shard)}.json`))
+	) {
+		return []
+	}
 	const own = shard?.index ?? 0
 	let failure: string | null = null
 	const explain = (error: unknown): string =>
