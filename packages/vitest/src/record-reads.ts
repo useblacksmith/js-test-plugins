@@ -272,26 +272,48 @@ if (!packages.hooked) {
 
 /** Whether `path.resolve` would return `file` as it is; false when unsure. Most reads name a file this way. */
 function isResolved(file: string): boolean {
-	return (
-		path.sep === '/' &&
-		file.length > 1 &&
-		file.charCodeAt(0) === 47 &&
-		!file.includes('/.') &&
-		!file.includes('//') &&
-		file.charCodeAt(file.length - 1) !== 47
-	)
+	if (path.sep !== '/' || file.length < 2 || file.charCodeAt(0) !== 47) {
+		return false
+	}
+	if (file.includes('//') || file.charCodeAt(file.length - 1) === 47) {
+		return false
+	}
+	// A `.` or `..` segment; a name that starts with a dot is not one.
+	for (let at = file.indexOf('/.'); at !== -1; at = file.indexOf('/.', at + 1)) {
+		let next = file.charCodeAt(at + 2)
+		if (next === 46) next = file.charCodeAt(at + 3)
+		if (Number.isNaN(next) || next === 47) return false
+	}
+	return true
 }
+
+// The package the last file read as data belongs to, as what its files start
+// with, and the set it went into. Node reads the files of a CommonJS package
+// one after another, thousands of times per test file.
+let lastRead: { prefix: string; into: Set<string> } | undefined
 
 function record(file: string, cwd?: string, content = true): void {
 	const set = dependencies()
 	if (!set) return
+	if (
+		content &&
+		lastRead !== undefined &&
+		file.startsWith(lastRead.prefix) &&
+		file.indexOf('node_modules', lastRead.prefix.length) === -1 &&
+		lastRead.into === packagesRead() &&
+		isResolved(file)
+	) {
+		return
+	}
 	const absolute = isResolved(file)
 		? file
 		: path.resolve(cwd ?? process.cwd(), file)
 	// A file of an installed package read as data: the package.
 	const installed = content ? packageOf(REPO, absolute) : null
 	if (installed !== null) {
-		packagesRead().add(installed)
+		const into = packagesRead()
+		into.add(installed)
+		lastRead = { prefix: installed + path.sep, into }
 		return
 	}
 	if (isIgnored(absolute, REPO)) return
