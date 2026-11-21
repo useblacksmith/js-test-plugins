@@ -346,8 +346,18 @@ describe('narrow: module digests', () => {
 			expect(made(code), code).toBe(true)
 		}
 		// A call of the language's that reads a `const` of literals runs nothing of the module's.
+		const HELPERS = [
+			'let n = 0',
+			'const label = (b: string) => b.toUpperCase()',
+			'function kept(b: string) { const out: string[] = []; for (const item of L) { if (item !== b) out.push(item) } return out }',
+			'function counted(b: string) { n = n + 1; return b }',
+			'function added(b: string) { L.push(b); return b }',
+			'function told(b: string) { return c(b) }',
+			'function again(b: string): string { return b ? again(b) : b }',
+			'function waits(b: string) { while (b) {} return b }',
+		].join('\n')
 		const read = (code: string, before = '') =>
-			digest(`const P = { b: 'c', d: ['e'], f: { g: 1 } } as const\nconst L = ['h', P.b]\n${before}\nexport const a = ${code}`)
+			digest(`const P = { b: 'c', d: ['e'], f: { g: 1 } } as const\nconst L = ['h', P.b]\n${HELPERS}\n${before}\nexport const a = ${code}`)
 				.units['a']?.effects
 		for (const code of [
 			'Object.keys(P)',
@@ -358,13 +368,34 @@ describe('narrow: module digests', () => {
 			'Object.keys(P as Record<string, () => void>)',
 			'[Object.keys(P), Object.values(L)]',
 			'Object.values({ ...P, h: [...L] })',
+			'Object.values(P.f)',
+			'Object.values(P).filter((b) => b !== P.b)',
+			'L.map((b) => b.toUpperCase())',
+			'L.join()',
+			'String(P)',
+			'new Set(L)',
+			'Array.from(L)',
+			// A function of the module's that writes only to what it made itself.
+			'kept(P.b)',
+			'L.map(label)',
+			'Object.keys(P).filter((b) => kept(b).length > 0)',
 			"Object.values({ b: 'c' + `d${P.b}`, e: -1, f: P.b ? 1 : 2 })",
 		]) {
 			expect(read(code), code).toBeUndefined()
 		}
 		for (const code of [
 			'Object.values(c)',
-			'Object.values(P.f)',
+			// One that writes to what was there before it, or calls what is not known.
+			'counted(P.b)',
+			'added(P.b)',
+			'L.map(told)',
+			'L.map((b) => c(b))',
+			'L.map((b) => b.missing.d)',
+			'Object.values(P).map(label)',
+			'again(P.b)',
+			'waits(P.b)',
+			'[...L].sort()',
+			'L.forEach((b) => b)',
 			'Object.values(P.missing)',
 			'Object.keys(null)',
 			'Object.keys(undefined)',
@@ -386,15 +417,9 @@ describe('narrow: module digests', () => {
 			'Object.assign(P)',
 			'Object.freeze(P)',
 			'Object.getOwnPropertyNames(P)',
-			'Object.values(P).filter((b) => b)',
 			'Object.keys(P).sort()',
 			'Object.keys(P).length.toString()',
-			'L.map((b) => b)',
-			'L.join()',
-			'String(P)',
 			'JSON.stringify(P)',
-			'new Set(L)',
-			'Array.from(L)',
 			'Reflect.ownKeys(P)',
 			'c.Object.values(P)',
 		]) {
