@@ -321,20 +321,6 @@ describe('narrow: module digests', () => {
 			'class { c = d(); e() { f() } }',
 			'<C d={() => e()} />',
 			'c as unknown as D<E>',
-			'Object.values(c)',
-			'Object.keys(c as Record<string, () => void>)',
-			'new Set<() => void>([c])',
-			'Object.freeze({ c: 1 })',
-			'Object.values(c).filter((d) => d !== e.f)',
-			"Object.keys(c).map((d) => d + 1).join(', ')",
-			'[c, d].map((e) => `${e}`)',
-			"'c d'.split(' ')",
-			'new Set(Object.values(c))',
-			'new Map([[c, 1]])',
-			'Array.from(c, (d) => d * 2)',
-			'Math.max(c, d)',
-			'String(c)',
-			'JSON.stringify(c)',
 		]) {
 			expect(made(code), code).toBeUndefined()
 		}
@@ -356,34 +342,87 @@ describe('narrow: module digests', () => {
 			'class { constructor(@c e) {} }',
 			'class extends c() {}',
 			'<C d={e()} />',
-			'Object.values(c).filter(d)',
-			'Object.values(c).filter((d) => e(d))',
-			'Object.values(c).forEach((d) => d)',
-			'Object.assign(c, d)',
-			'Object.freeze(c)',
-			'Object.defineProperty(c, d, {})',
-			'c.map((d) => d)',
-			'c.values()',
-			'[c].sort()',
-			'[c].push(d)',
-			'new Set(c())',
-			'new C(Object.values(d))',
-			'Array.from(c, d)',
-			'JSON.stringify(c, d)',
-			'JSON.parse(c)',
-			'[c].map(async (d) => d)',
-			'JSON.stringify(c, (d, e) => f(e))',
-			"String({ toString() { return '' } })",
-			'new Set({ [Symbol.iterator]: () => c })',
-			"[c].join({ toString: () => '' })",
 		]) {
 			expect(made(code), code).toBe(true)
 		}
+		// A call of the language's that reads a `const` of literals runs nothing of the module's.
+		const read = (code: string, before = '') =>
+			digest(`const P = { b: 'c', d: ['e'], f: { g: 1 } } as const\nconst L = ['h', P.b]\n${before}\nexport const a = ${code}`)
+				.units['a']?.effects
+		for (const code of [
+			'Object.keys(P)',
+			'Object.values(P)',
+			'Object.entries(P)',
+			'Object.values(P.f)',
+			'Object.keys(L)',
+			"Object.values({ b: 'c' })",
+			'Object.keys(P as Record<string, () => void>)',
+			'[Object.keys(P), Object.values(L)]',
+			'Object.values({ ...P, h: [...L] })',
+			"Object.values({ b: 'c' + `d${P.b}`, e: -1, f: P.b ? 1 : 2 })",
+		]) {
+			expect(read(code), code).toBeUndefined()
+		}
+		for (const code of [
+			'Object.values(c)',
+			'Object.values(P, c)',
+			'Object.values(...L)',
+			'Object.values(P[c])',
+			'Object.values({ ...c })',
+			'Object.values({ get b() { return 1 } })',
+			'Object.values({ b() {} })',
+			'Object.values({ b: c })',
+			'Object.values([c])',
+			"Object.values({ b: 'c' + c })",
+			'Object.values({ b: `${c}` })',
+			'Object.values({ b: delete P.b })',
+			'Object?.values(P)',
+			'Object.values?.(P)',
+			'Object[c](P)',
+			'Object.assign(P)',
+			'Object.freeze(P)',
+			'Object.getOwnPropertyNames(P)',
+			'Object.values(P).filter((b) => b)',
+			'Object.keys(P).sort()',
+			'Object.keys(P).length.toString()',
+			'L.map((b) => b)',
+			'L.join()',
+			'String(P)',
+			'JSON.stringify(P)',
+			'new Set(L)',
+			'Array.from(L)',
+			'Reflect.ownKeys(P)',
+			'c.Object.values(P)',
+		]) {
+			expect(read(code), code).toBe(true)
+		}
+		// Not of a `let`, of one made of more than literals, or once something else of the module's has run.
+		for (const [before, code] of [
+			["let M = { b: 'c' }", 'Object.values(M)'],
+			["var M = { b: 'c' }", 'Object.values(M)'],
+			['const M = { b: c }', 'Object.values(M)'],
+			['const M = c({})', 'Object.values(M)'],
+			['const { M } = { M: {} }', 'Object.values(M)'],
+			['c(P)', 'Object.values(P)'],
+			['c()', 'Object.values(L)'],
+			['const M = c()', 'Object.values(P)'],
+			['P.b = 1', 'Object.values(P)'],
+			['class C { static d = c() }', 'Object.values(P)'],
+			['@c class C {}', 'Object.values(P)'],
+			['export default c()', 'Object.values(P)'],
+			['export const d = c()', 'Object.values(P)'],
+		] as const) {
+			expect(read(code, before), `${before}; ${code}`).toBe(true)
+		}
+		// What only declares, or reads, leaves it as written.
+		for (const before of ['function c() { P.b = 1 }', 'const M = () => c(P)', 'const M = P.d', 'type T = typeof P', 'export { P }']) {
+			expect(read('Object.values(P)', before), before).toBeUndefined()
+		}
 		// A name of the module's own is not the language's.
 		for (const code of [
-			"import { Object } from './c.ts'\nexport const a = Object.values(d)",
-			'const Set = c\nexport const a = new Set()',
-			'function String() {}\nexport const a = String(c)',
+			"import { Object } from './c.ts'\nconst P = {}\nexport const a = Object.values(P)",
+			'const Object = c\nconst P = {}\nexport const a = Object.values(P)',
+			'function Object() {}\nconst P = {}\nexport const a = Object.values(P)',
 		]) {
 			expect(digest(code).units['a']?.effects, code).toBe(true)
 		}
@@ -456,19 +495,19 @@ describe('narrow: module digests', () => {
 				digest("export const FLAGS = {\nA: 'a',\nb: function () { return this.A }\n} as const"),
 				digest("export const FLAGS = {\nA: 'a',\ntoString: 1\n} as const"),
 				digest("export let FLAGS = {\nA: 'a',\nB: 'b'\n}"),
-				digest("export const FLAGS = Object.freeze({\nA: 'a',\nB: 'b'\n})"),
 			]) {
 				const change = difference(before, after)
 				expect(change).toMatchObject({ values: new Set(['FLAGS']) })
 				expect(change).toHaveProperty('keys', new Map())
 			}
 			expect(difference(before, digest("export const FLAGS = make({\nA: 'a',\nB: 'b'\n})"))).toBe('all')
+			expect(difference(before, digest("export const FLAGS = Object.freeze({\nA: 'a',\nB: 'b'\n})"))).toBe('all')
 		})
 
 		test('a key whose value may do more than make it is a change for every test that loaded the module', () => {
 			expect(difference(flags("A: 'a',\nB: make('b'),"), flags("A: 'a',\nB: make('b2'),"))).toBe('all')
 			// So is one for a value built from the object that may, and not for one that only makes a value.
-			const names = 'export const NAMES = Object.keys(FLAGS).filter((key) => key !== FLAGS.A)'
+			const names = 'export const NAMES = Object.keys(FLAGS)'
 			expect(difference(flags("A: 'a',", names), flags("A: 'a2',", names))).toMatchObject({
 				values: new Set(['FLAGS', 'NAMES']),
 			})

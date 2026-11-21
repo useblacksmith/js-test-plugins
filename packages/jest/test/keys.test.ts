@@ -61,12 +61,12 @@ describe('narrow: a change to one key of an object literal', () => {
 	})
 
 	test('a changed value that only makes a value reruns what imports it', () => {
-		edit('Object.keys(FLAGS)', 'Object.keys(FLAGS).slice()')
+		edit('Object.keys(FLAGS)', 'Object.values(FLAGS)')
 		assert.deepEqual(run(), ['names'])
 	})
 
 	test('a changed value that calls something reruns every test file that loaded the module', () => {
-		edit('Object.keys(FLAGS).slice()', 'Object.keys(FLAGS).sort()')
+		edit('Object.values(FLAGS)', 'Object.keys(FLAGS).sort()')
 		assert.deepEqual(run(), ['alpha', 'any', 'beta', 'idle', 'local', 'names', 'plain'])
 	})
 })
