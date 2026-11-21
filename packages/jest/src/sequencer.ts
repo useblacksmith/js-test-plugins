@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 
 import { diffTrees } from '../../shared/src/git.ts'
@@ -63,6 +63,8 @@ const Base: SequencerClass = loaded.default ?? loaded
 
 export default class BlacksmithSequencer extends Base {
 	private readonly blacksmithConfig: GlobalConfig | undefined
+	/** The test files of every shard: a shard saves the records of the others' test files too, whose modules theirs resolve. */
+	private everyTest: Test[] | null = null
 
 	// Jest 30 passes `{ contexts, globalConfig }`; Jest 29 passes nothing.
 	constructor(...args: unknown[]) {
@@ -84,6 +86,7 @@ export default class BlacksmithSequencer extends Base {
 			)
 		}
 		ctx.shard = { index: options.shardIndex, count: options.shardCount }
+		this.everyTest = tests
 		return tests.filter(
 			(test) =>
 				shardFor(toRelative(ctx.repo, test.path), options.shardCount) ===
@@ -101,7 +104,7 @@ export default class BlacksmithSequencer extends Base {
 		if (watching) return super.sort(tests)
 		let selected = tests
 		const resolvers = new Set(
-			tests.flatMap((test) => test.context?.resolver ?? []),
+			(this.everyTest ?? tests).flatMap((test) => test.context?.resolver ?? []),
 		)
 		ctx.oneResolver = resolvers.size <= 1
 		ctx.resolve = (from, specifier) => {
@@ -145,7 +148,13 @@ async function affected(owned: string[], coverage: boolean): Promise<Pending> {
 	const ctx = state()
 	const shard = ctx.shard
 	const entries = await restore(ctx, shard)
-	if (entries) return fromEntries(entries, owned, coverage)
+	if (entries) {
+		try {
+			return await fromEntries(entries, owned, coverage)
+		} finally {
+			for (const entry of entries) rmSync(entry.dir, { recursive: true, force: true })
+		}
+	}
 	const records = loadRecords(readJson<StoredRecords | Records>(recordsFile(ctx, shard)))
 	const anchor = readJson<Anchor>(anchorFile(ctx, shard))
 	const everything = (reason: string): Record<string, Decision> =>
@@ -220,6 +229,8 @@ async function fromEntries(
 			.filter(([, taken]) => taken.entry === entry)
 			.map(([spec]) => spec)
 		if (specs.length === 0) continue
+		// Whatever becomes of its test files: what every test file depends on is loaded once and not again while a cache of the transformed files is warm.
+		merged.global = [...new Set([...merged.global, ...records.global])].sort()
 		const differs = diffTrees(
 			anchor.tree,
 			await currentTree(
@@ -255,7 +266,6 @@ async function fromEntries(
 			kept.push(spec)
 		}
 		if (kept.length === 0) continue
-		merged.global = [...new Set([...merged.global, ...records.global])].sort()
 		merged.at = Math.max(merged.at, records.at)
 		sources.push({ records, units: entry.units, specs: kept })
 	}

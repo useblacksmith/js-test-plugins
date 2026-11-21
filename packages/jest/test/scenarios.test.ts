@@ -27,9 +27,9 @@ const driver: Driver = {
 		'--json',
 		`--outputFile=${report}`,
 		// A shard of the three test files may own none.
-		...(project.shard === null
-			? []
-			: [`--shard=${project.shard}`, '--passWithNoTests']),
+		...(project.shard
+			? [`--shard=${project.shard}`, '--passWithNoTests']
+			: []),
 	],
 	files: (report) =>
 		(report as { testResults: { name: string }[] }).testResults.map(
