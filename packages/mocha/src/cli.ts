@@ -12,7 +12,7 @@ import type { Options } from '../../core/src/select.ts'
 import { shardFor } from '../../core/src/shard.ts'
 import type { Entered } from '../../core/src/unitstore.ts'
 import { readJson, writeJson, type Shard } from '../../core/src/store.ts'
-import { digester } from './narrow.ts'
+import { digester, narrows } from './narrow.ts'
 import { ENV_IN_CLI, ENV_RUN, dataDir } from './paths.ts'
 import type { MochaRun } from './pieces.ts'
 
@@ -87,7 +87,8 @@ async function context(): Promise<Context> {
 		dir,
 		options,
 		always: ALWAYS,
-		digester: digester(repo),
+		// Turned off, a function record of an earlier run narrows nothing and is dropped.
+		digester: narrows() ? digester(repo) : undefined,
 		log,
 		warn: (message) => console.error(`[blacksmith] ${message}`),
 	})
