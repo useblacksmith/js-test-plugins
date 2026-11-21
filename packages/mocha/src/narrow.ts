@@ -38,10 +38,11 @@ export function mark(code: string, filename: string, key: string): string | null
 	const analysis = analyze(code, filename, key)
 	if (!analysis) return null
 	// TypeScript checked strictly refuses a name `globalThis` is not declared
-	// to have: there the global object is reached through a variable of type `any`.
+	// to have. The cast is erased with the types, so a function turned into
+	// text and run somewhere else still names nothing of this module.
 	const typed = /\.[cm]?tsx?$/.test(filename)
 	const plain = `globalThis.${HIT}`
-	const target = typed ? `(${GLOBAL}??=Function("return this")()).${HIT}` : plain
+	const target = typed ? `(globalThis as any).${HIT}` : plain
 	const call = (name: string) => `${target}?.(${JSON.stringify(key)},${JSON.stringify(name)});`
 	// After the directives, which only count at the start, or after a `#!` line, which has to stay the first.
 	const start =
@@ -62,13 +63,8 @@ export function mark(code: string, filename: string, key: string): string | null
 		from = at
 	}
 	out += code.slice(from)
-	// `var` is hoisted: a function called before this line finds the variable, still empty.
-	return typed
-		? `${out}\n;;var ${GLOBAL}=Function("return")();${call(LOADED)}`
-		: out + globalFooter(key)
+	return typed ? `${out}\n;${call(LOADED)}` : out + globalFooter(key)
 }
-
-const GLOBAL = `${HIT}_g`
 
 const EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']
 

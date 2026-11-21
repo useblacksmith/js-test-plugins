@@ -129,9 +129,11 @@ describe('marks', () => {
 		assert.ok(marked?.startsWith('#!/usr/bin/env node\nglobalThis.'), marked ?? 'not marked')
 	})
 
-	test('TypeScript reaches the global object through a variable a strict check accepts', () => {
-		const marked = mark('export function f(): number {\n\treturn 1\n}\n', '/repo/a.ts', 'a.ts')
-		assert.ok(marked && !marked.includes('globalThis'), marked ?? 'not marked')
+	test('TypeScript marks pass a strict check and name nothing of the module', () => {
+		const marked = mark('export function f(): number {\n\treturn 1\n}\n', '/repo/a.ts', 'a.ts') ?? ''
+		assert.ok(marked.includes('(globalThis as any).'), marked)
+		// Every mark goes through the cast: a bare `globalThis.<name>` is what TS7017 rejects.
+		assert.equal(marked.replaceAll('(globalThis as any).', '').includes('globalThis'), false, marked)
 	})
 
 	test('line numbers stay as they were', () => {
