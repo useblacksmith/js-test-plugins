@@ -129,6 +129,21 @@ describe('a test file two projects run', () => {
 		assert.ok(deps.includes('src/lib-b.js'), deps.join())
 	})
 
+	test('runs in both projects on one shard', () => {
+		const ran = [1, 2].map((shard) => {
+			const result = repo.jest(
+				'--runInBand',
+				'--shard',
+				`${shard}/2`,
+				'--passWithNoTests',
+			)
+			assert.equal(result.status, 0, result.output)
+			return result.output.match(/^PASS .*which\.test\.js$/gm)?.length ?? 0
+		})
+		// Jest alone gives each shard one of the two copies.
+		assert.deepEqual(ran.sort(), [0, 2])
+	})
+
 	for (const name of ['a', 'b']) {
 		test(`reruns for a change only project ${name} resolves`, () => {
 			repo.write(`src/lib-${name}.js`, 'export const which = () => 2 - 1\n')

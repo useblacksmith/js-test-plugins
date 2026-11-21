@@ -1241,6 +1241,23 @@ describe('--project narrows what a snapshot vouches for', () => {
 	})
 })
 
+describe('a test file of two projects under --shard', () => {
+	test('runs in both projects on one shard', async () => {
+		const repo = new Repo('projects-shards', 'fixture-projects')
+		const ran: string[][] = []
+		for (const shard of [1, 2]) {
+			const result = await repo.run(`--shard=${shard}/2`, '--passWithNoTests')
+			expect(result.exitCode, result.output).toBe(0)
+			ran.push(result.ran)
+		}
+		// Vitest alone gives each shard one of the two copies.
+		expect(ran.sort((a, b) => a.length - b.length)).toEqual([
+			[],
+			['shared', 'shared'],
+		])
+	})
+})
+
 describe('projects that do not extend the root config', () => {
 	test('are selected like the ones that do', async () => {
 		const repo = new Repo('plain-projects', 'fixture-projects')

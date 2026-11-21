@@ -37,7 +37,7 @@ export function stableShards(Theirs: SequencerClass): SequencerClass {
 			files: TestSpecification[],
 		): Promise<TestSpecification[]> => {
 			const owns = await shardOwner(this.#vitest)
-			return files.filter((file) => owns(file.moduleId, file.project.name))
+			return files.filter((file) => owns(file.moduleId))
 		}
 	}
 }
@@ -45,26 +45,29 @@ export function stableShards(Theirs: SequencerClass): SequencerClass {
 /**
  * Which tests this shard runs, independent of the selection: by the
  * sequencer's own `shard()`, Vitest's or the config's, over the full test
- * list.
+ * list. Every project's copy of a test file is on one shard.
  */
 export async function shardOwner(
 	vitest: Vitest,
-): Promise<(moduleId: string, project?: string) => boolean> {
+): Promise<(moduleId: string) => boolean> {
 	if (!vitest.config.shard) return () => true
 	const configured = vitest.config.sequence.sequencer
 	const Theirs =
 		(configured as { [WRAPPED]?: SequencerClass })[WRAPPED] ?? configured
-	// A sequencer shards specifications, so a test file of two projects can be on two shards.
-	const owned = new Map<string, Set<string>>()
-	for (const specification of await new Theirs(vitest).shard(
-		await vitest.globTestSpecifications(),
-	)) {
-		const projects = owned.get(specification.moduleId) ?? new Set()
-		projects.add(specification.project.name)
-		owned.set(specification.moduleId, projects)
+	const every = await vitest.globTestSpecifications()
+	// A sequencer shards specifications, so it can put a test file of two
+	// projects on two shards. The records are per test file, so the file goes
+	// whole to the shard given its copy in the first project by name.
+	const first = new Map<string, string>()
+	for (const { moduleId, project } of every) {
+		const name = first.get(moduleId)
+		if (name === undefined || project.name < name) {
+			first.set(moduleId, project.name)
+		}
 	}
-	return (moduleId, project) =>
-		project === undefined
-			? owned.has(moduleId)
-			: owned.get(moduleId)?.has(project) === true
+	const owned = new Set<string>()
+	for (const { moduleId, project } of await new Theirs(vitest).shard(every)) {
+		if (first.get(moduleId) === project.name) owned.add(moduleId)
+	}
+	return (moduleId) => owned.has(moduleId)
 }
