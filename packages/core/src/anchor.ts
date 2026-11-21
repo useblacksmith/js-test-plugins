@@ -22,6 +22,8 @@ export interface Anchor {
 	tree: Tree
 	/** The commit the anchor was taken at: a path it does not name is compared with its blob there. */
 	head?: string
+	/** Recorded paths that did not exist when the anchor was taken: one that exists now is a change, whatever the commit holds for it. */
+	absent?: string[]
 	/** Node major, platform and arch the run was made on; another one does not share its skips. */
 	runtime?: string
 	/** The workflow file and job the run was part of (see `jobId`); another job's `env` and steps differ, so it does not share its skips. */
@@ -186,7 +188,8 @@ export async function currentTree(
 	for (const file of Object.keys(tree)) {
 		if (path.posix.basename(file) !== 'package.json' || isPackagePath(file)) continue
 		// One a test read itself is compared in full: its dependency fields are that test's input.
-		if (read.has(file)) continue
+		// So is one a rule names: the rule says its content is an input.
+		if (read.has(file) || scope.rules.names(file)) continue
 		const shape = manifestShape(path.join(scope.repo, file))
 		if (shape !== null) tree[file] = shape
 	}
@@ -201,14 +204,15 @@ export async function currentTree(
 export async function changedSince(repo: string, anchor: Anchor, tree: Tree): Promise<string[]> {
 	const changed = diffTrees(anchor.tree, tree)
 	if (!anchor.head) return changed
+	const absent = new Set(anchor.absent)
 	const fresh = changed.filter(
-		(file) => !Object.hasOwn(anchor.tree, file) && Object.hasOwn(tree, file),
+		(file) => !Object.hasOwn(anchor.tree, file) && Object.hasOwn(tree, file) && !absent.has(file),
 	)
 	if (fresh.length === 0) return changed
 	const blobs = await blobsAt(repo, anchor.head, fresh)
 	if (!blobs) return changed
 	return changed.filter((file) => {
 		const sha = tree[file]?.split(' ')[1]
-		return !(blobs.has(file) && blobs.get(file) === sha)
+		return absent.has(file) || !(blobs.has(file) && blobs.get(file) === sha)
 	})
 }

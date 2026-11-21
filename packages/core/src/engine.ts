@@ -85,6 +85,8 @@ export interface Pending {
 	trigger?: string
 	/** The stored record already lost what `changed` invalidates: it came from cache entries, each compared with its own anchor. */
 	settled?: boolean
+	/** No record vouched for anything here (none, or one of another job or runtime): the run starts one, and adds to none. */
+	unrecorded?: boolean
 }
 
 export interface PlanOptions {
@@ -185,7 +187,13 @@ export class Session {
 		const everything = (reason: string): Record<string, Decision> =>
 			Object.fromEntries(owned.map((spec) => [spec, { run: true, reason }]))
 		if (!records || !anchor) {
-			return { shard, owned: [...owned], changed: [], selection: everything('no record') }
+			return {
+				shard,
+				owned: [...owned],
+				changed: [],
+				selection: everything('no record'),
+				unrecorded: true,
+			}
 		}
 		const changed = await changedSince(
 			this.runner.repo,
@@ -354,7 +362,7 @@ export class Session {
 		})
 		// A record put together from cache entries has lost what the change staled already.
 		const changed = pending.settled ? [] : pending.changed
-		const before = this.store.readRecords(shard)
+		const before = pending.unrecorded ? null : this.store.readRecords(shard)
 		const policy: Policy = {
 			rules: this.rules,
 			affects:
@@ -392,10 +400,15 @@ export class Session {
 		if (digester && options.entered) {
 			updateUnits(repo, this.store.unitsFile(shard), digester, before, merged, options.entered)
 		} else dropUnits(this.store.unitsFile(shard))
-		const tree = await currentTree(this.#scope, recordedPaths(merged), readManifests(merged))
+		const recorded = [...new Set(recordedPaths(merged))]
+		const tree = await currentTree(this.#scope, recorded, readManifests(merged))
+		const absent = recorded.filter(
+			(file) => !isPackagePath(file) && !existsSync(path.join(repo, file)),
+		)
 		this.store.writeRecords(shard, merged)
 		this.store.writeAnchor(shard, {
 			tree,
+			...(absent.length > 0 ? { absent } : {}),
 			head: await headSha(repo).catch(() => ''),
 			runtime: runtimeId(),
 			job: jobId(),

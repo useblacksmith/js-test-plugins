@@ -5,6 +5,8 @@
  * import graph the dependencies are closed over. Paths are
  * repository-relative with `/`.
  */
+import path from 'node:path'
+import { isPackagePath } from './packages.ts'
 export const RECORDS_VERSION = 7
 
 export type TestState = 'passed' | 'failed' | 'skipped'
@@ -222,9 +224,12 @@ export function recordedPaths(records: Records): Set<string> {
 
 /** Every package.json a test file read itself. */
 export function readManifests(records: Records): Set<string> {
-	return new Set(
-		Object.values(records.files).flatMap((entry) => entry.manifests ?? []),
-	)
+	const read = new Set(Object.values(records.files).flatMap((entry) => entry.manifests ?? []))
+	// One a module imported was read as well: the import graph is where a runner that records per test keeps those.
+	for (const file of Object.values(records.graph).flat()) {
+		if (path.posix.basename(file) === 'package.json' && !isPackagePath(file)) read.add(file)
+	}
+	return read
 }
 
 /** Whether nothing in the record says the test file has to run again for its own sake. */
