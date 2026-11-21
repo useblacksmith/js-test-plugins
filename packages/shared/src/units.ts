@@ -309,7 +309,8 @@ function loud(program: Node, own: (name: string) => boolean, code: string): Set<
 	const scope: Module = {
 		own,
 		taken(name) {
-			if (!names.has(name)) names.set(name, taken(program, name))
+			// Most modules never write the name at all.
+			if (!names.has(name)) names.set(name, code.includes(name) && taken(program, name))
 			return names.get(name)!
 		},
 		fns: new Map(),
@@ -319,10 +320,19 @@ function loud(program: Node, own: (name: string) => boolean, code: string): Set<
 		budget: { left: 20000 },
 	}
 	// A function declaration can be called before the statement that declares it.
-	const written = reassigned(program, new Set())
 	for (const statement of program.body as Node[]) {
 		const node: Node = statement.declaration ?? statement
-		if (node.type === 'FunctionDeclaration' && node.id && node.body && !written.has(node.id.name)) scope.fns.set(node.id.name, node)
+		if (node.type === 'FunctionDeclaration' && node.id && node.body) scope.fns.set(node.id.name, node)
+	}
+	// One that is assigned to is not what was declared. Looked for when a function is first asked for: few modules call one.
+	let checked = false
+	const get = scope.fns.get.bind(scope.fns)
+	scope.fns.get = (name) => {
+		if (!checked) {
+			checked = true
+			for (const written of reassigned(program, new Set())) scope.fns.delete(written)
+		}
+		return get(name)
 	}
 	const visit = (node: Node, constant: boolean): void => {
 		const all =
