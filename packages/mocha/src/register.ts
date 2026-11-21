@@ -517,6 +517,7 @@ function install(): void {
 					raw.statSync(candidate).isFile()
 				) {
 					charge(to, candidate)
+					readWhole.add(rel(candidate))
 				}
 			} catch {}
 		}
@@ -588,6 +589,7 @@ function install(): void {
 					: filename
 		if (script !== null && !ignored(path.resolve(script))) {
 			charge(to, path.resolve(script))
+			readWhole.add(rel(path.resolve(script)))
 		}
 		// A worker sharing the parent's environment contributes only its script.
 		const recorded =
@@ -803,6 +805,9 @@ function install(): void {
 		})
 	}
 
+	/** Spec files that loaded a module nothing narrows: a run of some of their tests keeps no function record for them. */
+	const whole = new Set<string>()
+
 	/** Module → functions for `spec`, of the marked modules it loaded or entered. */
 	function ranBy(spec: string, edges: Record<string, string[]>): Record<string, string[]> {
 		const entry = files.get(spec)
@@ -811,6 +816,7 @@ function install(): void {
 		for (const test of entry?.tests.values() ?? []) roots.push(...test.deps)
 		const ran: Record<string, string[]> = {}
 		for (const module of new Set([...closure(edges, roots), ...(own?.keys() ?? [])])) {
+			if (readWhole.has(module)) whole.add(spec)
 			if (!marked.has(module) || readWhole.has(module)) continue
 			ran[module] = [
 				...new Set([...(enteredByAll.get(module) ?? []), ...(own?.get(module) ?? [])]),
@@ -835,6 +841,7 @@ function install(): void {
 			late: {},
 			...(narrowing ? { ran: {}, lateRan: {} } : {}),
 		}
+		const flushed: string[] = []
 		for (const spec of specs) {
 			const entry = files.get(spec)
 			if (!entry) continue
@@ -849,6 +856,7 @@ function install(): void {
 			}
 			if (piece.ran) {
 				piece.ran[spec] = ranBy(spec, piece.graph)
+				if (whole.delete(spec)) flushed.push(spec)
 				enteredBy.delete(spec)
 			}
 			piece.files[spec] = {
@@ -882,6 +890,7 @@ function install(): void {
 				enteredBy.delete(spec)
 			}
 		}
+		if (flushed.length > 0) piece.whole = flushed
 		raw.writeFileSync(
 			path.join(recordRoot, `piece-${process.pid}-${sequence++}.json`),
 			JSON.stringify(piece),
