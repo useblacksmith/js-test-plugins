@@ -335,6 +335,7 @@ describe('narrow: module digests', () => {
 			'delete c.d',
 			"import('./c.ts')",
 			'class { static c = d() }',
+			'class { static c = [null.d, [1].map((e) => e)] }',
 			'class { static { c() } }',
 			'class { @c d() {} }',
 			'class { @c d = 1 }',
@@ -345,9 +346,25 @@ describe('narrow: module digests', () => {
 		]) {
 			expect(made(code), code).toBe(true)
 		}
+		// What is around a call must not throw either, whatever holds it.
+		expect(digest('export default [null.b, [1].map((c) => c)]').units['default']?.effects).toBe(true)
+		expect(digest('export default [1].map((c) => c)').units['default']?.effects).toBeUndefined()
+		// A variable of a function that is named as a `const` helper leaves the helper as it is.
+		const named = "const P = { b: 'b' }\nconst same = (b: string) => b\nfunction other() { let same = 1; same = 2; return same }\n"
+		expect(digest(`${named}export const a = same(P.b)`).units['a']?.effects).toBeUndefined()
 		// A call of the language's that reads a `const` of literals runs nothing of the module's.
+		const HELPERS = [
+			'let n = 0',
+			'const label = (b: string) => b.toUpperCase()',
+			'function kept(b: string) { const out: string[] = []; for (const item of L) { if (item !== b) out.push(item) } return out }',
+			'function counted(b: string) { n = n + 1; return b }',
+			'function added(b: string) { L.push(b); return b }',
+			'function told(b: string) { return c(b) }',
+			'function again(b: string): string { return b ? again(b) : b }',
+			'function waits(b: string) { while (b) {} return b }',
+		].join('\n')
 		const read = (code: string, before = '') =>
-			digest(`const P = { b: 'c', d: ['e'], f: { g: 1 } } as const\nconst L = ['h', P.b]\n${before}\nexport const a = ${code}`)
+			digest(`const P = { b: 'c', d: ['e'], f: { g: 1 } } as const\nconst L = ['h', P.b]\n${HELPERS}\n${before}\nexport const a = ${code}`)
 				.units['a']?.effects
 		for (const code of [
 			'Object.keys(P)',
@@ -358,13 +375,34 @@ describe('narrow: module digests', () => {
 			'Object.keys(P as Record<string, () => void>)',
 			'[Object.keys(P), Object.values(L)]',
 			'Object.values({ ...P, h: [...L] })',
+			'Object.values(P.f)',
+			'Object.values(P).filter((b) => b !== P.b)',
+			'L.map((b) => b.toUpperCase())',
+			'L.join()',
+			'String(P)',
+			'new Set(L)',
+			'Array.from(L)',
+			// A function of the module's that writes only to what it made itself.
+			'kept(P.b)',
+			'L.map(label)',
+			'Object.keys(P).filter((b) => kept(b).length > 0)',
 			"Object.values({ b: 'c' + `d${P.b}`, e: -1, f: P.b ? 1 : 2 })",
 		]) {
 			expect(read(code), code).toBeUndefined()
 		}
 		for (const code of [
 			'Object.values(c)',
-			'Object.values(P.f)',
+			// One that writes to what was there before it, or calls what is not known.
+			'counted(P.b)',
+			'added(P.b)',
+			'L.map(told)',
+			'L.map((b) => c(b))',
+			'L.map((b) => b.missing.d)',
+			'Object.values(P).map(label)',
+			'again(P.b)',
+			'waits(P.b)',
+			'[...L].sort()',
+			'L.forEach((b) => b)',
 			'Object.values(P.missing)',
 			'Object.keys(null)',
 			'Object.keys(undefined)',
@@ -386,15 +424,9 @@ describe('narrow: module digests', () => {
 			'Object.assign(P)',
 			'Object.freeze(P)',
 			'Object.getOwnPropertyNames(P)',
-			'Object.values(P).filter((b) => b)',
 			'Object.keys(P).sort()',
 			'Object.keys(P).length.toString()',
-			'L.map((b) => b)',
-			'L.join()',
-			'String(P)',
 			'JSON.stringify(P)',
-			'new Set(L)',
-			'Array.from(L)',
 			'Reflect.ownKeys(P)',
 			'c.Object.values(P)',
 		]) {
@@ -412,6 +444,43 @@ describe('narrow: module digests', () => {
 			['const M = c()', 'Object.values(P)'],
 			['P.b = 1', 'Object.values(P)'],
 			['class C { static d = c() }', 'Object.values(P)'],
+			// A method the module replaces, a function it writes over, and an assignment that throws.
+			['Array.prototype.map = c', "['b'].map((b) => b)"],
+			['function patch() { globalThis.Math.abs = c }', 'Math.abs(2)'],
+			['function patch() { window.Math.abs = c }', 'Math.abs(2)'],
+			// A function expression that calls itself by its own name, which a function of the module has as well.
+			['', '[1].map(function kept(b) { return kept(b) })'],
+			['Object.assign(Array.prototype, c)', "['b'].map((b) => b)"],
+			['for (kept of [counted]) {}', 'kept(P.b)'],
+			['function patch() { c(Array) }', "['b'].map((b) => b)"],
+			['function patch() { c(Array) }', 'kept(P.b)'],
+			['function patch() { c(Object) }', 'String(P)'],
+			['function patch() { Array.prototype.push = c }', 'kept(P.b)'],
+			['function patch() { Object.prototype.toString = c }', 'String(P)'],
+			['function patch() { \\u0041rray.from = c }', "['b'].map((b) => b)"],
+			['function patch() { Object.getPrototypeOf([]).map = c }', "['b'].map((b) => b)"],
+			// A key worked out as it runs, or taken apart, may be the one that leads to an array's methods.
+			["function patch() { []['__pro' + 'to__'].map = c }", "['b'].map((b) => b)"],
+			['function patch(d: string) { const e: any = []; e[d].map = c }', "['b'].map((b) => b)"],
+			['function patch(d: string) { const { [d]: e } = [] as any; e.map = c }', "['b'].map((b) => b)"],
+			['function patch() { const { constructor: e } = []; e.from = c }', "['b'].map((b) => b)"],
+			['function patch() { c([].constructor) }', "['b'].map((b) => b)"],
+			['function patch(d: string) { Reflect.get([], d).map = c }', "['b'].map((b) => b)"],
+			// One of those names as a string, a reader of keys by a string, and what holds every builtin.
+			["function patch() { Object.getOwnPropertyDescriptor([], '__proto__').get.call([]).map = c }", "['b'].map((b) => b)"],
+			["function patch(d: string) { Object.getOwnPropertyDescriptor(c, d).value.map = c }", "['b'].map((b) => b)"],
+			["function patch() { c([], `prototype`) }", "['b'].map((b) => b)"],
+			["function patch() { ([] as any).__lookupGetter__(c).call([]).map = c }", "['b'].map((b) => b)"],
+			["function patch() { Object.getOwnPropertyDescriptor(globalThis, 'Array') }", "['b'].map((b) => b)"],
+			['function patch() { c(globalThis) }', "['b'].map((b) => b)"],
+			['function patch() { c(window) }', "['b'].map((b) => b)"],
+			['function patch() { c(window.Array) }', "['b'].map((b) => b)"],
+			['function patch() { c(window.top) }', "['b'].map((b) => b)"],
+			["function patch() { c(self['Array']) }", "['b'].map((b) => b)"],
+			['function patch() { const { Array: d } = c(); c(d) }', "['b'].map((b) => b)"],
+			['function patch() { c(document.defaultView) }', "['b'].map((b) => b)"],
+			['const d = window', "['b'].map((b) => b)"],
+			['function fixed(b: string) { const d = b; d = b; return d }', 'fixed(P.b)'],
 			['@c class C {}', 'Object.values(P)'],
 			['export default c()', 'Object.values(P)'],
 			['export const d = c()', 'Object.values(P)'],
@@ -419,7 +488,7 @@ describe('narrow: module digests', () => {
 			expect(read(code, before), `${before}; ${code}`).toBe(true)
 		}
 		// What only declares, or reads, leaves it as written.
-		for (const before of ['function c(d: Object): Object { return d as Object }', 'type T = Record<string, Object>', "import type { Object } from './c.ts'", 'function c() { return Object.freeze({ Object: 1 }) }', 'function c() { P.b = 1 }', 'const M = () => c(P)', 'const M = P.d', 'type T = typeof P', 'export { P }']) {
+		for (const before of ['function c(d: Object): Object { return d as Object }', 'class C { constructor() {} }', "const M = { constructor: 1, d: 'caf\\u00e9' }", "const M = { self: 1, 'prototype': 2, d: 'a window, by itself' }", 'function self() { return 1 }', "const M = typeof window === 'undefined' ? 'global' : 'self'", 'function d() { return window.location.href }', "function d() { window.addEventListener('b', () => {}) }", 'const M = [1][0]', 'type T = Record<string, Object>', "import type { Object } from './c.ts'", 'function c() { return Object.freeze({ Object: 1 }) }', 'function c() { P.b = 1 }', 'const M = () => c(P)', 'const M = P.d', 'type T = typeof P', 'export { P }']) {
 			expect(read('Object.values(P)', before), before).toBeUndefined()
 		}
 		// A name of the module's own is not the language's.
@@ -437,6 +506,17 @@ describe('narrow: module digests', () => {
 			'const P = {}\nfunction c() { Object[d] = e }\nexport const a = Object.values(P)',
 		]) {
 			expect(digest(code).units['a']?.effects, code).toBe(true)
+		}
+		// What a call gives is extended, taken apart or made a key of, any of which may throw.
+		for (const code of [
+			'export class a extends Math.abs(1) {}',
+			'export const a = class extends Math.abs(1) {}',
+			'export const [a] = Math.abs(1)',
+			'const pick = (b: number) => (b ? { a: 1 } : null)\nexport const { a } = pick(0)',
+			'export class a { [Math.abs(1)]() {} }',
+			'export class a { static [Math.abs(1)] = 1 }',
+		]) {
+			expect(Object.values(digest(code).units).some((unit) => unit.effects), code).toBe(true)
 		}
 		expect(digest('export function a() { b() }').units['a']?.effects).toBeUndefined()
 		for (const code of ['export default c()', 'export default class { static c = d() }', 'export class a { static c = d() }']) {
