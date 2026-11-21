@@ -181,8 +181,17 @@ function effects(node: Node | null | undefined): boolean {
 	if (node.type === 'UnaryExpression' && node.operator === 'delete') return true
 	if (node.type === 'ArrowFunctionExpression' || node.type === 'FunctionExpression') return false
 	if (node.type === 'FunctionDeclaration') return false
-	if (node.type === 'MethodDefinition') return node.computed ? effects(node.key) : false
-	if (node.type === 'PropertyDefinition' && !node.static) return node.computed ? effects(node.key) : false
+	// A decorator runs as the class is made, whatever it is on.
+	if (node.type === 'MethodDefinition') {
+		return (
+			effects(node.decorators) ||
+			(node.value?.params as Node[] | undefined)?.some((param) => effects(param.decorators)) ||
+			(node.computed ? effects(node.key) : false)
+		)
+	}
+	if (node.type === 'PropertyDefinition' && !node.static) {
+		return effects(node.decorators) || (node.computed ? effects(node.key) : false)
+	}
 	for (const key in node) {
 		if (key === 'type' || key === 'start' || key === 'end') continue
 		if (key === 'typeAnnotation' || key === 'typeArguments' || key === 'typeParameters') continue

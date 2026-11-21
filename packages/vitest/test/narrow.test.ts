@@ -336,6 +336,10 @@ describe('narrow: module digests', () => {
 			"import('./c.ts')",
 			'class { static c = d() }',
 			'class { static { c() } }',
+			'class { @c d() {} }',
+			'class { @c d = 1 }',
+			'class { d(@c e) {} }',
+			'class { constructor(@c e) {} }',
 			'class extends c() {}',
 			'<C d={e()} />',
 		]) {
