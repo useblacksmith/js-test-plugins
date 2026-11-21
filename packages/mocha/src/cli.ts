@@ -437,6 +437,8 @@ async function fromEntries(
 			),
 		)
 		for (const file of differs) changed.add(file)
+		// Whatever becomes of its spec files: what every spec file depends on is not loaded again by each run.
+		merged.global = [...new Set([...merged.global, ...entry.records.global])].sort()
 		const trigger = differs.find((file) => always.has(file))
 		if (trigger !== undefined) {
 			for (const spec of specs) {
