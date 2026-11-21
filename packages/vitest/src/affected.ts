@@ -583,6 +583,12 @@ export class TreeSnapshotProvider {
 	 * vouches that they need not run, whatever filters the run also applies.
 	 */
 	deselected = new Set<string>()
+	/**
+	 * Test files of other shards that the entry this run replaces vouched
+	 * for, and that nothing changed for since: the run's own entry keeps
+	 * vouching for them, or the shard that owns them now would find no record.
+	 */
+	carried = new Set<string>()
 	/** The plugin's `dependencies` option, compiled. */
 	dependencies: DependencyRule[] = []
 	/** Whether to look inside a changed file instead of rerunning every test file that loaded it. */
@@ -616,6 +622,7 @@ export class TreeSnapshotProvider {
 	async findChangedFiles(options: VCSProviderOptions): Promise<string[]> {
 		this.deselected = new Set()
 		const cacheDir = this.vitest.vite.config.cacheDir
+		await this.carry(options)
 		const entries = restoredEntries(this.vitest)
 		if (entries) return this.fromEntries(options, entries)
 		// Vitest 5.1 hands over its record and selects from the changed files
@@ -694,6 +701,33 @@ export class TreeSnapshotProvider {
 			return specifications.map((specification) => specification.moduleId)
 		}
 		return selected
+	}
+
+	private async carry(options: VCSProviderOptions): Promise<void> {
+		this.carried = new Set()
+		const kept = carriedOf.get(this.vitest)
+		if (!kept || kept.tests.size === 0) return
+		const specifications = (await this.vitest.globTestSpecifications()).filter(
+			(specification) => kept.tests.has(specification.moduleId),
+		)
+		const selected = await this.select(
+			options,
+			await ownDependencies(this.vitest, kept.dir, specifications),
+			kept.dir,
+			() => {},
+			kept.tests,
+		)
+		if (selected === null) return
+		const affected = await affectedTests(
+			this.vitest,
+			selected,
+			await readRecords(this.vitest, kept.dir),
+			specifications,
+		)
+		if (affected.wouldRun === 'all') return
+		for (const { moduleId } of specifications) {
+			if (!affected.wouldRun.has(moduleId)) this.carried.add(moduleId)
+		}
 	}
 
 	/**
@@ -1290,7 +1324,7 @@ export class SnapshotRecorder implements Reporter {
 	}
 
 	/** The provider vitest is using: the root config's, which may come from another copy of this module. */
-	private activeProvider(): { deselected: Set<string> } {
+	private activeProvider(): { deselected: Set<string>; carried: Set<string> } {
 		return configuredProvider(this.vitest) ?? this.provider
 	}
 
@@ -1428,7 +1462,9 @@ export class SnapshotRecorder implements Reporter {
 				cacheDir,
 				this.provider.dependencies,
 			),
-			tests: vouched.map((file) => repoRelative(repo, file)).sort(),
+			tests: [...new Set([...vouched, ...this.activeProvider().carried])]
+				.map((file) => repoRelative(repo, file))
+				.sort(),
 		}
 		const file = snapshotPath(this.vitest, cacheDir)
 		await mkdir(path.dirname(file), { recursive: true })
@@ -1607,6 +1643,13 @@ export async function restoreDependencyCache(
 		return
 	}
 	const owns = await shardOwner(vitest)
+	const replaced = found.find((entry) => entry.index === own)
+	const others = new Set(
+		(replaced?.snapshot.tests ?? [])
+			.map((relative) => path.join(repo, relative))
+			.filter((file) => !owns(file)),
+	)
+	if (replaced) carriedOf.set(vitest, { dir: replaced.dir, tests: others })
 	const taken = new Set<string>()
 	const entries: CacheEntry[] = []
 	for (const { dir, key, snapshot } of found) {
@@ -1640,8 +1683,11 @@ export async function restoreDependencyCache(
 		return
 	}
 	const { root } = vitest.config
+	const sources = replaced
+		? [...entries, { dir: replaced.dir, key: replaced.key, tests: others }]
+		: entries
 	await mergeRecords(
-		entries.map((entry) => ({
+		sources.map((entry) => ({
 			records: recordsPath(vitest, entry.dir),
 			dir: entry.dir,
 			units: unitsFile(snapshotPath(vitest, entry.dir)),
@@ -1676,6 +1722,10 @@ interface CacheEntry {
 // On the process: a project with its own root evaluates the config, and so
 // the plugin, a second time.
 const ENTRIES = Symbol.for('blacksmith.vitest.cacheEntries')
+const CARRIED = Symbol.for('blacksmith.vitest.carriedTests')
+const carriedOf = ((globalThis as unknown as {
+	[CARRIED]?: WeakMap<Vitest, { dir: string; tests: ReadonlySet<string> }>
+})[CARRIED] ??= new WeakMap())
 const entriesOf = ((globalThis as unknown as {
 	[ENTRIES]?: WeakMap<Vitest, CacheEntry[]>
 })[ENTRIES] ??= new WeakMap())
