@@ -224,6 +224,11 @@ function effects(node: Node | null | undefined, own: (name: string) => boolean):
 		const method = callee.property.name as string
 		const object = unwrap(callee.object)
 		if (object?.type === 'Identifier' && Object.hasOwn(STATICS, object.name) && !own(object.name)) {
+			// Freezing an object made somewhere else changes it for what else holds it.
+			if (object.name === 'Object' && method === 'freeze') {
+				const frozen = unwrap(args[0])
+				if (frozen?.type !== 'ObjectExpression' && frozen?.type !== 'ArrayExpression') return true
+			}
 			const methods = STATICS[object.name]!
 			if (methods !== true && !methods.has(method)) return true
 			// `Array.from(x, fn)` calls `fn`.

@@ -358,6 +358,7 @@ describe('narrow: module digests', () => {
 			'Object.values(c).filter((d) => e(d))',
 			'Object.values(c).forEach((d) => d)',
 			'Object.assign(c, d)',
+			'Object.freeze(c)',
 			'Object.defineProperty(c, d, {})',
 			'c.map((d) => d)',
 			'c.values()',
