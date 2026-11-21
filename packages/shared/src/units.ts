@@ -685,19 +685,24 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 	// Imported by name: a namespace or a default export holds no such constant.
 	const named = new Set<string>()
 	let aliases: Digest['aliases']
+	const locals = new Map<string, Map<string, Set<string>>>()
 	for (const entry of imported) {
 		if (dropped.has(entry)) continue
-		const locals = new Map<string, string[]>()
 		for (const [name, local] of entry.names) {
 			if (!bindings.has(local) || name === '*') continue
 			if (name !== 'default' && !names.has(local)) named.add(local)
-			locals.set(name, [...(locals.get(name) ?? []), local])
+			let of = locals.get(entry.source)
+			if (!of) locals.set(entry.source, (of = new Map()))
+			const list = of.get(name)
+			if (list) list.add(local)
+			else of.set(name, new Set([local]))
 		}
-		for (const [name, list] of locals) {
-			if (list.length === 1 && list[0] === name) continue
-			;((aliases ??= {})[entry.source] ??= {})[name] = [
-				...new Set([...(aliases[entry.source]?.[name] ?? []), ...list]),
-			]
+	}
+	// One specifier may be imported more than once, a name taken each time its own way.
+	for (const [source, of] of locals) {
+		for (const [name, list] of of) {
+			if (list.size === 1 && list.has(name)) continue
+			;((aliases ??= {})[source] ??= {})[name] = [...list].sort()
 		}
 	}
 	const readsOf = (ids: Ids, refs: string[]): Record<string, string[]> | undefined => {

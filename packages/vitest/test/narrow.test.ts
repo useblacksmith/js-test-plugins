@@ -395,6 +395,10 @@ describe('narrow: module digests', () => {
 			}
 			// A namespace and a default export are no such constant.
 			expect(digest("import all, * as ns from './flags.ts'\nexport const a = () => [all.A, ns.A]").units['a']?.reads).toBeUndefined()
+			// One specifier imported twice, called two ways.
+			expect(
+				digest("import { FLAGS } from './flags.ts'\nimport { FLAGS as ALL } from './flags.ts'\nexport const a = () => [FLAGS.A, ALL.B]").aliases,
+			).toEqual({ '?./flags.ts': { FLAGS: ['ALL', 'FLAGS'] } })
 			// One module under two specifiers, called two ways.
 			const analysis = analyze(
 				"import { FLAGS } from './flags.ts'\nimport { FLAGS as ALL } from '~/flags'\nexport const a = () => [FLAGS.A, Object.keys(ALL)]",
