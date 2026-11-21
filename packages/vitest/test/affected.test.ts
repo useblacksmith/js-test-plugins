@@ -1585,6 +1585,10 @@ describe('the dependency record travels through the Actions cache', () => {
 			expect(run.exitCode, run.output).toBe(0)
 			expect(run.ran, run.output).toEqual([])
 		}
+		// And an unsharded run finds them all.
+		const whole = new Repo('shard-count-whole')
+		whole.env = { ACTIONS_RESULTS_URL: cache.url }
+		expect((await whole.run('--changed')).ran).toEqual([])
 		// A change reruns its test file on exactly one shard, and nothing else.
 		const ran: string[] = []
 		for (const shard of ['1/3', '2/3', '3/3']) {
@@ -1596,10 +1600,6 @@ describe('the dependency record travels through the Actions cache', () => {
 			ran.push(...run.ran)
 		}
 		expect(ran.sort()).toEqual(['one', 'two'])
-		// And an unsharded run finds them all.
-		const whole = new Repo('shard-count-whole')
-		whole.env = { ACTIONS_RESULTS_URL: cache.url }
-		expect((await whole.run('--changed')).ran).toEqual([])
 	})
 
 	test('more shards than maxShards fails the run', async () => {

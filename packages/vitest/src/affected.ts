@@ -144,6 +144,8 @@ export interface Snapshot {
 	tree: Tree
 	/** Repo-relative test files the run vouches for, sorted: passed, or deselected by our provider as unchanged. A test outside this set (never run, failed, interrupted) reruns whatever its record says. */
 	tests: string[]
+	/** When each of `tests` last ran and passed, in milliseconds: of the entries that vouch for a test file, the one with the latest run is used. One missing here ran at `at`. */
+	times: Record<string, number>
 }
 
 const LOCKFILES = new Set([
@@ -510,7 +512,7 @@ async function readSnapshot(file: string): Promise<Snapshot | null> {
 		return null
 	}
 	if (typeof parsed !== 'object' || parsed === null) return null
-	const { version, runtime, head, at, root, shard, job, projects, tree, tests } =
+	const { version, runtime, head, at, root, shard, job, projects, tree, tests, times } =
 		parsed as Record<string, unknown>
 	if (
 		version !== SNAPSHOT_VERSION ||
@@ -524,7 +526,10 @@ async function readSnapshot(file: string): Promise<Snapshot | null> {
 		!projects.every((name) => typeof name === 'string') ||
 		!isTree(tree) ||
 		!Array.isArray(tests) ||
-		!tests.every((file) => typeof file === 'string')
+		!tests.every((file) => typeof file === 'string') ||
+		typeof times !== 'object' ||
+		times === null ||
+		!Object.values(times).every((time) => typeof time === 'number')
 	) {
 		return null
 	}
@@ -539,6 +544,7 @@ async function readSnapshot(file: string): Promise<Snapshot | null> {
 		projects: projects as string[],
 		tree,
 		tests: tests as string[],
+		times: times as Record<string, number>,
 	}
 }
 
@@ -588,7 +594,7 @@ export class TreeSnapshotProvider {
 	 * for, and that nothing changed for since: the run's own entry keeps
 	 * vouching for them, or the shard that owns them now would find no record.
 	 */
-	carried = new Set<string>()
+	carried = new Map<string, number>()
 	/** The plugin's `dependencies` option, compiled. */
 	dependencies: DependencyRule[] = []
 	/** Whether to look inside a changed file instead of rerunning every test file that loaded it. */
@@ -622,7 +628,7 @@ export class TreeSnapshotProvider {
 	async findChangedFiles(options: VCSProviderOptions): Promise<string[]> {
 		this.deselected = new Set()
 		const cacheDir = this.vitest.vite.config.cacheDir
-		await this.carry(options)
+		this.carried = new Map()
 		const entries = restoredEntries(this.vitest)
 		if (entries) return this.fromEntries(options, entries)
 		// Vitest 5.1 hands over its record and selects from the changed files
@@ -703,38 +709,13 @@ export class TreeSnapshotProvider {
 		return selected
 	}
 
-	private async carry(options: VCSProviderOptions): Promise<void> {
-		this.carried = new Set()
-		const kept = carriedOf.get(this.vitest)
-		if (!kept || kept.tests.size === 0) return
-		const specifications = (await this.vitest.globTestSpecifications()).filter(
-			(specification) => kept.tests.has(specification.moduleId),
-		)
-		const selected = await this.select(
-			options,
-			await ownDependencies(this.vitest, kept.dir, specifications),
-			kept.dir,
-			() => {},
-			kept.tests,
-		)
-		if (selected === null) return
-		const affected = await affectedTests(
-			this.vitest,
-			selected,
-			await readRecords(this.vitest, kept.dir),
-			specifications,
-		)
-		if (affected.wouldRun === 'all') return
-		for (const { moduleId } of specifications) {
-			if (!affected.wouldRun.has(moduleId)) this.carried.add(moduleId)
-		}
-	}
-
 	/**
-	 * The test files to run when the records come from several cache entries
-	 * (the shard count changed, or a test file moved between shards). Each
-	 * entry decides for the test files taken from it, against its own anchor
-	 * and with its own records, exactly as a run restoring it alone would.
+	 * The test files to run when the records come from several cache entries,
+	 * or from one that also vouches for other shards' test files. Each entry
+	 * decides for the test files taken from it, against its own anchor and
+	 * with its own records, exactly as a run restoring it alone would. The
+	 * same decision says which of the other shards' test files nothing
+	 * changed for: the run's own entry goes on vouching for those.
 	 */
 	private async fromEntries(
 		options: VCSProviderOptions,
@@ -748,16 +729,19 @@ export class TreeSnapshotProvider {
 		const taken = new Set<string>()
 		let spared = 0
 		for (const entry of entries) {
-			const mine = specifications.filter((specification) =>
-				entry.tests.has(specification.moduleId),
+			const only = new Set([...entry.tests, ...entry.others.keys()])
+			const theirs = specifications.filter((specification) =>
+				only.has(specification.moduleId),
 			)
-			for (const specification of mine) taken.add(specification.moduleId)
+			for (const { moduleId } of theirs) {
+				if (entry.tests.has(moduleId)) taken.add(moduleId)
+			}
 			const selected = await this.select(
 				options,
-				await ownDependencies(this.vitest, entry.dir, mine),
+				await ownDependencies(this.vitest, entry.dir, theirs),
 				entry.dir,
 				log,
-				entry.tests,
+				only,
 			)
 			const recorded = await recordedDependencies(this.vitest, entry.dir)
 			const needs =
@@ -775,23 +759,31 @@ export class TreeSnapshotProvider {
 							this.vitest,
 							selected,
 							await readRecords(this.vitest, entry.dir),
-							mine,
+							theirs,
 							needs &&
 								((test, changedDeps) => {
 									const deps = recorded.get(test)
 									if (deps && !needs(test, deps, changedDeps)) {
-										spared++
+										if (entry.tests.has(test)) spared++
 										return false
 									}
 									return true
 								}),
 						)
-			if (affected !== null && affected.wouldRun !== 'all') {
-				for (const file of affected.wouldRun) run.add(file)
-				continue
+			if (affected !== null && affected.wouldRun === 'all') {
+				log(`${affected.reason}, running every test`)
 			}
-			if (affected !== null) log(`${affected.reason}, running every test`)
-			for (const specification of mine) run.add(specification.moduleId)
+			const all = affected === null || affected.wouldRun === 'all'
+			for (const { moduleId } of theirs) {
+				const reruns =
+					all || (affected.wouldRun as Set<string>).has(moduleId)
+				if (entry.tests.has(moduleId)) {
+					if (reruns) run.add(moduleId)
+					continue
+				}
+				const time = entry.others.get(moduleId)
+				if (!reruns && time !== undefined) this.carried.set(moduleId, time)
+			}
 		}
 		// A test file no entry vouches for: new, failed last time, or never run.
 		const owns = await shardOwner(this.vitest)
@@ -1324,7 +1316,7 @@ export class SnapshotRecorder implements Reporter {
 	}
 
 	/** The provider vitest is using: the root config's, which may come from another copy of this module. */
-	private activeProvider(): { deselected: Set<string>; carried: Set<string> } {
+	private activeProvider(): { deselected: Set<string>; carried: Map<string, number> } {
 		return configuredProvider(this.vitest) ?? this.provider
 	}
 
@@ -1462,9 +1454,22 @@ export class SnapshotRecorder implements Reporter {
 				cacheDir,
 				this.provider.dependencies,
 			),
-			tests: [...new Set([...vouched, ...this.activeProvider().carried])]
-				.map((file) => repoRelative(repo, file))
-				.sort(),
+			tests: [],
+			times: {},
+		}
+		// Other shards' test files first: this run's own result replaces theirs.
+		const now = snapshot.at
+		for (const [test, time] of [
+			...this.activeProvider().carried,
+			...vouched.map((test) => [test, now] as const),
+		]) {
+			// One deleted since, or moved out of the repository's test files.
+			if (!existsSync(test)) continue
+			snapshot.times[repoRelative(repo, test)] = time
+		}
+		snapshot.tests = Object.keys(snapshot.times).sort()
+		for (const [test, time] of Object.entries(snapshot.times)) {
+			if (time === now) delete snapshot.times[test]
 		}
 		const file = snapshotPath(this.vitest, cacheDir)
 		await mkdir(path.dirname(file), { recursive: true })
@@ -1643,65 +1648,71 @@ export async function restoreDependencyCache(
 		return
 	}
 	const owns = await shardOwner(vitest)
-	const replaced = found.find((entry) => entry.index === own)
-	const others = new Set(
-		(replaced?.snapshot.tests ?? [])
-			.map((relative) => path.join(repo, relative))
-			.filter((file) => !owns(file)),
-	)
-	if (replaced) carriedOf.set(vitest, { dir: replaced.dir, tests: others })
-	const taken = new Set<string>()
-	const entries: CacheEntry[] = []
-	for (const { dir, key, snapshot } of found) {
-		const tests = new Set<string>()
-		for (const relative of snapshot.tests) {
-			const file = path.join(repo, relative)
-			if (taken.has(file) || !owns(file)) continue
-			taken.add(file)
-			tests.add(file)
+	// Each test file from the entry that ran it last; on a tie the shard's
+	// own entry, which comes first.
+	const latest = new Map<string, { time: number; from: number }>()
+	found.forEach(({ snapshot }, from) => {
+		for (const test of snapshot.tests) {
+			const time = snapshot.times[test] ?? snapshot.at
+			const known = latest.get(test)
+			if (known === undefined || time > known.time) latest.set(test, { time, from })
 		}
-		if (tests.size > 0) entries.push({ dir, key, tests })
+	})
+	const entries: CacheEntry[] = found.map(({ dir, key }) => ({
+		dir,
+		key,
+		tests: new Set<string>(),
+		others: new Map<string, number>(),
+	}))
+	for (const [test, { time, from }] of latest) {
+		const file = path.join(repo, test)
+		const entry = entries[from]
+		if (entry === undefined) continue
+		if (owns(file)) (entry.tests as Set<string>).add(file)
+		else (entry.others as Map<string, number>).set(file, time)
 	}
+	const used = entries.filter((entry) => entry.tests.size + entry.others.size > 0)
 	await mkdir(cacheDir, { recursive: true })
 	const mine = found[0]
-	// The shard's own entry, saved under this count, has all there is to
-	// have: the run goes on from it alone.
+	// The shard's own entry, saved under this count, vouching for its test
+	// files alone and for all of them: the run goes on from it as it is.
 	if (
 		mine !== undefined &&
 		mine.index === own &&
 		sameShard(mine.saved, vitest.config.shard) &&
-		entries.every((entry) => entry.dir === mine.dir)
+		used.every((entry) => entry.dir === mine.dir && entry.others.size === 0)
 	) {
 		await cp(mine.dir, cacheDir, { recursive: true })
 		vitest.logger.log(`[blacksmith] restored dependency cache ${mine.key}`)
 		return
 	}
-	if (entries.length === 0) {
+	if (used.length === 0) {
 		vitest.logger.log(
 			`[blacksmith] no dependency cache: no entry holds a test file of the ${describeShard(vitest.config.shard)}`,
 		)
 		return
 	}
 	const { root } = vitest.config
-	const sources = replaced
-		? [...entries, { dir: replaced.dir, key: replaced.key, tests: others }]
-		: entries
 	await mergeRecords(
-		sources.map((entry) => ({
-			records: recordsPath(vitest, entry.dir),
-			dir: entry.dir,
-			units: unitsFile(snapshotPath(vitest, entry.dir)),
-			fromRoot: new Set([...entry.tests].map((file) => rootRelative(root, file))),
-			fromRepo: new Set([...entry.tests].map((file) => repoRelative(repo, file))),
-		})),
+		used.map((entry) => {
+			const tests = [...entry.tests, ...entry.others.keys()]
+			return {
+				records: recordsPath(vitest, entry.dir),
+				dir: entry.dir,
+				units: unitsFile(snapshotPath(vitest, entry.dir)),
+				fromRoot: new Set(tests.map((file) => rootRelative(root, file))),
+				fromRepo: new Set(tests.map((file) => repoRelative(repo, file))),
+			}
+		}),
 		{
 			records: recordsPath(vitest, cacheDir),
 			dir: cacheDir,
 			units: unitsFile(snapshotPath(vitest, cacheDir)),
 		},
 	)
-	entriesOf.set(vitest, entries)
-	for (const entry of entries) {
+	entriesOf.set(vitest, used)
+	for (const entry of used) {
+		if (entry.tests.size === 0) continue
 		vitest.logger.log(
 			`[blacksmith] restored dependency cache ${entry.key} for ${entry.tests.size} test files`,
 		)
@@ -1717,15 +1728,13 @@ interface CacheEntry {
 	dir: string
 	key: string
 	tests: ReadonlySet<string>
+	/** Test files of other shards it vouches for, and when each last ran. */
+	others: ReadonlyMap<string, number>
 }
 
 // On the process: a project with its own root evaluates the config, and so
 // the plugin, a second time.
 const ENTRIES = Symbol.for('blacksmith.vitest.cacheEntries')
-const CARRIED = Symbol.for('blacksmith.vitest.carriedTests')
-const carriedOf = ((globalThis as unknown as {
-	[CARRIED]?: WeakMap<Vitest, { dir: string; tests: ReadonlySet<string> }>
-})[CARRIED] ??= new WeakMap())
 const entriesOf = ((globalThis as unknown as {
 	[ENTRIES]?: WeakMap<Vitest, CacheEntry[]>
 })[ENTRIES] ??= new WeakMap())
