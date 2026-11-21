@@ -42,6 +42,11 @@ export function stableShards(Theirs: SequencerClass): SequencerClass {
 	}
 }
 
+type Owns = (moduleId: string, project?: string) => boolean
+
+/** The answer for the test files a run listed last, so that one run asks its sequencer once. */
+const ownedBy = new WeakMap<Vitest, { listed: string; owns: Owns }>()
+
 /**
  * Which tests this shard runs, independent of the selection: by the
  * sequencer's own `shard()`, Vitest's or the config's, over the full test
@@ -49,22 +54,35 @@ export function stableShards(Theirs: SequencerClass): SequencerClass {
  */
 export async function shardOwner(
 	vitest: Vitest,
-): Promise<(moduleId: string, project?: string) => boolean> {
+): Promise<Owns> {
 	if (!vitest.config.shard) return () => true
 	const configured = vitest.config.sequence.sequencer
 	const Theirs =
 		(configured as { [WRAPPED]?: SequencerClass })[WRAPPED] ?? configured
+	// Vitest lists the specifications of the project whose files it found
+	// first, first, and its sequencer keeps that order for a test file two
+	// projects have. In the projects' own order every shard, and every call
+	// here, splits them the same way.
+	const at = new Map(vitest.projects.map((project, index) => [project, index]))
+	const every = [...(await vitest.globTestSpecifications())].sort(
+		(a, b) => (at.get(a.project) ?? 0) - (at.get(b.project) ?? 0),
+	)
+	const listed = every
+		.map((specification) => `${specification.project.name}\0${specification.moduleId}`)
+		.join('\n')
+	const known = ownedBy.get(vitest)
+	if (known?.listed === listed) return known.owns
 	// A sequencer shards specifications, so a test file of two projects can be on two shards.
 	const owned = new Map<string, Set<string>>()
-	for (const specification of await new Theirs(vitest).shard(
-		await vitest.globTestSpecifications(),
-	)) {
+	for (const specification of await new Theirs(vitest).shard(every)) {
 		const projects = owned.get(specification.moduleId) ?? new Set()
 		projects.add(specification.project.name)
 		owned.set(specification.moduleId, projects)
 	}
-	return (moduleId, project) =>
+	const owns: Owns = (moduleId, project) =>
 		project === undefined
 			? owned.has(moduleId)
 			: owned.get(moduleId)?.has(project) === true
+	ownedBy.set(vitest, { listed, owns })
+	return owns
 }

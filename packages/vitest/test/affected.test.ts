@@ -1739,6 +1739,16 @@ describe('the dependency record travels through the Actions cache', () => {
 			`--shard=${passed}`,
 		)
 		expect(rest.ran, rest.output).toEqual([])
+		// Each shard's entry now also vouches for the other's copy: still nothing runs.
+		for (const round of [1, 2]) {
+			for (const shard of ['1/2', '2/2']) {
+				const run = await make(`split-round-${round}-${shard[0]}`, 'third').run(
+					'--changed',
+					`--shard=${shard}`,
+				)
+				expect(run.ran, run.output).toEqual([])
+			}
+		}
 	})
 
 	test('more shards than maxShards fails the run', async () => {
