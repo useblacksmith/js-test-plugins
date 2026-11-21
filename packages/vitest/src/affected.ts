@@ -1,6 +1,15 @@
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rename, writeFile } from 'node:fs/promises'
+import {
+	cp,
+	mkdir,
+	mkdtemp,
+	readdir,
+	readFile,
+	rename,
+	rm,
+	writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import picomatch from 'picomatch'
@@ -43,6 +52,7 @@ import {
 	type Tree,
 } from '../../shared/src/git.js'
 import { shardOwner } from './sequencer.js'
+import { mergeRecords } from './merge.js'
 import { readPackages, updatePackages } from './packages.js'
 import { advanceDigests, narrowing, unitsFile, updateUnits } from './units.js'
 import {
@@ -56,7 +66,7 @@ export const UNSUPPORTED_VITEST =
 	'[blacksmith] @useblacksmith/vitest selects changed tests on Vitest 4.1.1 or newer 4.x, or 5.1.0 or newer; upgrade vitest, or set `runAllTests: true` and drop --changed'
 // Bumped whenever the snapshot's shape changes or the records an anchor
 // vouches for gain a kind of dependency, so an older snapshot is not trusted.
-const SNAPSHOT_VERSION = 9
+const SNAPSHOT_VERSION = 10
 
 /** A `dependencies` entry, compiled: test files matching `tests` depend on files matching `deps`; both root-relative. */
 export interface DependencyRule {
@@ -122,6 +132,8 @@ export interface Snapshot {
 	/** Node major, platform and arch the run was made on; another one does not share its skips. */
 	runtime: string
 	head: string
+	/** When it was written, in milliseconds: of two entries that vouch for a test file, the later one is used. */
+	at: number
 	/** Vitest's root relative to the repository, so one package's snapshot never vouches for another's. */
 	root: string
 	shard: Shard | null
@@ -498,12 +510,13 @@ async function readSnapshot(file: string): Promise<Snapshot | null> {
 		return null
 	}
 	if (typeof parsed !== 'object' || parsed === null) return null
-	const { version, runtime, head, root, shard, job, projects, tree, tests } =
+	const { version, runtime, head, at, root, shard, job, projects, tree, tests } =
 		parsed as Record<string, unknown>
 	if (
 		version !== SNAPSHOT_VERSION ||
 		typeof runtime !== 'string' ||
 		typeof head !== 'string' ||
+		typeof at !== 'number' ||
 		typeof root !== 'string' ||
 		!isShard(shard) ||
 		typeof job !== 'string' ||
@@ -519,6 +532,7 @@ async function readSnapshot(file: string): Promise<Snapshot | null> {
 		version: SNAPSHOT_VERSION,
 		runtime,
 		head,
+		at,
 		root,
 		shard,
 		job,
@@ -602,6 +616,8 @@ export class TreeSnapshotProvider {
 	async findChangedFiles(options: VCSProviderOptions): Promise<string[]> {
 		this.deselected = new Set()
 		const cacheDir = this.vitest.vite.config.cacheDir
+		const entries = restoredEntries(this.vitest)
+		if (entries) return this.fromEntries(options, entries)
 		// Vitest 5.1 hands over its record and selects from the changed files
 		// itself; on an older one both are the plugin's.
 		const own = dependencyStore(this.vitest) !== null
@@ -681,6 +697,89 @@ export class TreeSnapshotProvider {
 	}
 
 	/**
+	 * The test files to run when the records come from several cache entries
+	 * (the shard count changed, or a test file moved between shards). Each
+	 * entry decides for the test files taken from it, against its own anchor
+	 * and with its own records, exactly as a run restoring it alone would.
+	 */
+	private async fromEntries(
+		options: VCSProviderOptions,
+		entries: readonly CacheEntry[],
+	): Promise<string[]> {
+		const log = (message: string) =>
+			this.vitest.logger.log(`[blacksmith] ${message}`)
+		const repo = await repoRoot(options.root)
+		const specifications = await this.vitest.globTestSpecifications()
+		const run = new Set<string>()
+		const taken = new Set<string>()
+		let spared = 0
+		for (const entry of entries) {
+			const mine = specifications.filter((specification) =>
+				entry.tests.has(specification.moduleId),
+			)
+			for (const specification of mine) taken.add(specification.moduleId)
+			const selected = await this.select(
+				options,
+				await ownDependencies(this.vitest, entry.dir, mine),
+				entry.dir,
+				log,
+				entry.tests,
+			)
+			const recorded = await recordedDependencies(this.vitest, entry.dir)
+			const needs =
+				selected !== null && this.narrow
+					? await narrowing(
+							repo,
+							unitsFile(snapshotPath(this.vitest, entry.dir)),
+							selected,
+						)
+					: null
+			const affected =
+				selected === null
+					? null
+					: await affectedTests(
+							this.vitest,
+							selected,
+							await readRecords(this.vitest, entry.dir),
+							mine,
+							needs &&
+								((test, changedDeps) => {
+									const deps = recorded.get(test)
+									if (deps && !needs(test, deps, changedDeps)) {
+										spared++
+										return false
+									}
+									return true
+								}),
+						)
+			if (affected !== null && affected.wouldRun !== 'all') {
+				for (const file of affected.wouldRun) run.add(file)
+				continue
+			}
+			if (affected !== null) log(`${affected.reason}, running every test`)
+			for (const specification of mine) run.add(specification.moduleId)
+		}
+		// A test file no entry vouches for: new, failed last time, or never run.
+		const owns = await shardOwner(this.vitest)
+		for (const specification of specifications) {
+			const file = specification.moduleId
+			if (owns(file) && !taken.has(file)) run.add(file)
+		}
+		for (const file of taken) if (!run.has(file)) this.deselected.add(file)
+		if (spared > 0) {
+			log(
+				`${spared} test files loaded a changed file but nothing in it that changed, not running them`,
+			)
+		}
+		await dropUnloadedRecords(
+			this.vitest,
+			this.vitest.vite.config.cacheDir,
+			run,
+		)
+		return [...run]
+	}
+
+	/**
 	 * Changed files to hand vitest, or `null` when every test of the shard has
 	 * to run; `dir` is where the record and anchor live (vitest's `cacheDir`,
 	 * or a shadow run's copy of it).
@@ -693,6 +792,8 @@ export class TreeSnapshotProvider {
 		}>,
 		dir: string,
 		log: (message: string) => void,
+		/** The test files to decide for, when `dir` holds one of several cache entries: the ones taken from it. */
+		only?: ReadonlySet<string>,
 	): Promise<string[] | null> {
 		const shard = this.vitest.config.shard
 
@@ -741,7 +842,9 @@ export class TreeSnapshotProvider {
 		const packages = await readPackages(dir)
 		const globalPackages = new Set(packages?.global ?? [])
 		const changedPaths = await this.changedSince(repo, snapshot, tree)
-		const owns = await shardOwner(this.vitest)
+		const owns = only
+			? (file: string) => only.has(file)
+			: await shardOwner(this.vitest)
 		// Entries without a record are test files vitest has never seen; a test
 		// the snapshot does not vouch for has no trustworthy record either,
 		// whatever vitest's dependencies.json holds about it.
@@ -1314,6 +1417,7 @@ export class SnapshotRecorder implements Reporter {
 			version: SNAPSHOT_VERSION,
 			runtime: runtimeId(),
 			head: await headSha(repo),
+			at: Date.now(),
 			root: repoRelative(repo, root),
 			shard: shard ?? null,
 			job: jobId(),
@@ -1424,7 +1528,10 @@ export class SnapshotRecorder implements Reporter {
  * directory itself may exist: every `vitest run` on one config shares it
  * (its hash is the root `test.name`, not the `--project` filter).
  */
-export async function restoreDependencyCache(vitest: Vitest): Promise<void> {
+export async function restoreDependencyCache(
+	vitest: Vitest,
+	maxShards = DEFAULT_MAX_SHARDS,
+): Promise<void> {
 	const base = process.env[ENV_CACHE_URL]
 	if (!base) {
 		if (process.env.TURBO_HASH)
@@ -1443,36 +1550,198 @@ export async function restoreDependencyCache(vitest: Vitest): Promise<void> {
 		return
 	}
 	const repo = await repoRoot(vitest.config.root)
-	const key = cacheKey({
-		snapshotVersion: SNAPSHOT_VERSION,
-		runtime: runtimeId(),
-		root: repoRelative(repo, vitest.config.root),
-		job: jobId(),
-		projects: projectNames(vitest),
-		shard: vitest.config.shard ?? null,
-		head: process.env.GITHUB_SHA || (await headSha(repo)),
-	})
+	const head = process.env.GITHUB_SHA || (await headSha(repo))
+	const keyOf = (index: number) =>
+		cacheKey({
+			snapshotVersion: SNAPSHOT_VERSION,
+			runtime: runtimeId(),
+			root: repoRelative(repo, vitest.config.root),
+			job: jobId(),
+			projects: projectNames(vitest),
+			shard: { index },
+			head,
+		})
 	if (!cacheMode().readable) {
 		vitest.logger.log(
 			'[blacksmith] no dependency cache: the Actions cache is not readable for this job',
 		)
 		return
 	}
-	try {
-		const outcome = await restoreBundle(
-			base,
-			vitest.vite.config.cacheDir,
-			key,
-			path.basename(recordsPath(vitest, vitest.vite.config.cacheDir)),
+	const cacheDir = vitest.vite.config.cacheDir
+	const records = path.basename(recordsPath(vitest, cacheDir))
+	const own = vitest.config.shard?.index ?? 1
+	let failure: string | null = null
+	// Every shard's entry, whatever count they were saved under: a test file
+	// that another shard ran last has its record there.
+	const fetched = await pooled(
+		Array.from({ length: Math.max(maxShards, own) }, (_, at) => at + 1),
+		RESTORES_AT_ONCE,
+		async (index) => {
+			const dir = await mkdtemp(path.join(tmpdir(), 'blacksmith-entry-'))
+			try {
+				const outcome = await restoreBundle(base, dir, keyOf(index), records)
+				if (outcome.restored) {
+					const snapshot = await adoptSnapshot(vitest, dir, index)
+					if (snapshot) return { index, dir, key: outcome.key, ...snapshot }
+				}
+			} catch (error) {
+				failure = error instanceof Error ? error.message : String(error)
+			}
+			await rm(dir, { recursive: true, force: true })
+			return null
+		},
+	)
+	const found = fetched
+		.filter((entry) => entry !== null)
+		.sort(
+			(a, b) =>
+				Number(b.index === own) - Number(a.index === own) ||
+				b.snapshot.at - a.snapshot.at,
 		)
+	if (found.length === 0) {
 		vitest.logger.log(
-			outcome.restored
-				? `[blacksmith] restored dependency cache ${outcome.key}`
-				: `[blacksmith] no dependency cache: ${outcome.reason}`,
+			failure === null
+				? `[blacksmith] no dependency cache: no entry under ${keyOf(own).prefix}`
+				: `[blacksmith] dependency cache not restored: ${failure}`,
 		)
-	} catch (error) {
+		return
+	}
+	const owns = await shardOwner(vitest)
+	const taken = new Set<string>()
+	const entries: CacheEntry[] = []
+	for (const { dir, key, snapshot } of found) {
+		const tests = new Set<string>()
+		for (const relative of snapshot.tests) {
+			const file = path.join(repo, relative)
+			if (taken.has(file) || !owns(file)) continue
+			taken.add(file)
+			tests.add(file)
+		}
+		if (tests.size > 0) entries.push({ dir, key, tests })
+	}
+	await mkdir(cacheDir, { recursive: true })
+	const mine = found[0]
+	// The shard's own entry, saved under this count, has all there is to
+	// have: the run goes on from it alone.
+	if (
+		mine !== undefined &&
+		mine.index === own &&
+		sameShard(mine.saved, vitest.config.shard) &&
+		entries.every((entry) => entry.dir === mine.dir)
+	) {
+		await cp(mine.dir, cacheDir, { recursive: true })
+		vitest.logger.log(`[blacksmith] restored dependency cache ${mine.key}`)
+		return
+	}
+	if (entries.length === 0) {
 		vitest.logger.log(
-			`[blacksmith] dependency cache not restored: ${error instanceof Error ? error.message : String(error)}`,
+			`[blacksmith] no dependency cache: no entry holds a test file of the ${describeShard(vitest.config.shard)}`,
+		)
+		return
+	}
+	const { root } = vitest.config
+	await mergeRecords(
+		entries.map((entry) => ({
+			records: recordsPath(vitest, entry.dir),
+			dir: entry.dir,
+			units: unitsFile(snapshotPath(vitest, entry.dir)),
+			fromRoot: new Set([...entry.tests].map((file) => rootRelative(root, file))),
+			fromRepo: new Set([...entry.tests].map((file) => repoRelative(repo, file))),
+		})),
+		{
+			records: recordsPath(vitest, cacheDir),
+			dir: cacheDir,
+			units: unitsFile(snapshotPath(vitest, cacheDir)),
+		},
+	)
+	entriesOf.set(vitest, entries)
+	for (const entry of entries) {
+		vitest.logger.log(
+			`[blacksmith] restored dependency cache ${entry.key} for ${entry.tests.size} test files`,
 		)
 	}
+}
+
+/** What `maxShards` is when the plugin's options leave it out. */
+export const DEFAULT_MAX_SHARDS = 20
+const RESTORES_AT_ONCE = 20
+
+/** One restored cache entry in a directory of its own, and the test files (absolute) the run takes from it. */
+interface CacheEntry {
+	dir: string
+	key: string
+	tests: ReadonlySet<string>
+}
+
+// On the process: a project with its own root evaluates the config, and so
+// the plugin, a second time.
+const ENTRIES = Symbol.for('blacksmith.vitest.cacheEntries')
+const entriesOf = ((globalThis as unknown as {
+	[ENTRIES]?: WeakMap<Vitest, CacheEntry[]>
+})[ENTRIES] ??= new WeakMap())
+
+/** The cache entries the run selects from, when it restored more than its own. */
+function restoredEntries(vitest: Vitest): CacheEntry[] | null {
+	return entriesOf.get(vitest) ?? null
+}
+
+async function pooled<T, R>(
+	items: readonly T[],
+	atOnce: number,
+	work: (item: T) => Promise<R>,
+): Promise<R[]> {
+	const results: R[] = []
+	let next = 0
+	await Promise.all(
+		Array.from({ length: Math.min(atOnce, items.length) }, async () => {
+			while (next < items.length) {
+				const at = next++
+				results[at] = await work(items[at] as T)
+			}
+		}),
+	)
+	return results
+}
+
+const SNAPSHOT_NAME = /^blacksmith(\.[0-9a-f]{12})?(\.\d+of\d+)?\.json$/
+
+/**
+ * Makes the anchor an entry was saved with, and its function record, the
+ * ones this run reads in `dir`: another shard, or this one on another count,
+ * named them after itself. `saved` is the shard that wrote it, number `index`.
+ */
+async function adoptSnapshot(
+	vitest: Vitest,
+	dir: string,
+	index: number,
+): Promise<{ snapshot: Snapshot; saved: Shard | null } | null> {
+	// A bundle carries the anchors of every run that shared the cache
+	// directory; the entry is the one of the shard it is named after.
+	let theirs: string | undefined
+	let snapshot: Snapshot | null = null
+	for (const name of await readdir(dir)) {
+		if (!SNAPSHOT_NAME.test(name)) continue
+		const file = path.join(dir, name)
+		const candidate: Snapshot | null =
+			snapshot === null ? await readSnapshot(file) : null
+		if (candidate !== null && (candidate.shard?.index ?? 1) === index) {
+			theirs = file
+			snapshot = candidate
+			continue
+		}
+		await rm(unitsFile(file), { force: true })
+		await rm(file)
+	}
+	if (theirs === undefined || snapshot === null) return null
+	const saved = snapshot.shard
+	const ours = snapshotPath(vitest, dir)
+	if (theirs !== ours) {
+		if (existsSync(unitsFile(theirs))) {
+			await rename(unitsFile(theirs), unitsFile(ours))
+		}
+		await rm(theirs)
+	}
+	snapshot.shard = vitest.config.shard ?? null
+	await writeFile(ours, JSON.stringify(snapshot))
+	return { snapshot, saved }
 }

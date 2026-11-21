@@ -345,7 +345,10 @@ export async function updatePackages(
 	}
 	records.global = links.expand(global, roots)
 	await mkdir(dir, { recursive: true })
-	const file = path.join(dir, PACKAGES_FILE)
+	await writePackages(path.join(dir, PACKAGES_FILE), records)
+}
+
+export async function writePackages(file: string, records: PackageRecords): Promise<void> {
 	const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
 	await writeFile(tmp, JSON.stringify(store(records)))
 	await rename(tmp, file)

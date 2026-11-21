@@ -60,6 +60,7 @@ Each run ends with a line saying how much it skipped: `[blacksmith] filtered out
 | option | default | effect |
 |---|---|---|
 | `runAllTests` | `false` | Run every test instead of the affected selection. |
+| `maxShards` | `20` | The largest `--shard` count accepted; a run split further fails. Each shard looks up the records of all shards up to this number, so changing the count reruns nothing. |
 | `dependencies` | `{}` | Dependencies the tracking cannot see, as globs of test files mapped to the glob(s) of the files they depend on, relative to the config root (`../shared/**` reaches outside a package): `{ 'tests/**/*.spec.ts': 'fixtures/**' }`. A change to a matching file reruns the mapped tests, git-ignored files (generated code, build output) included; a glob that matches no file in the repository warns. |
 
 ## Narrowing
