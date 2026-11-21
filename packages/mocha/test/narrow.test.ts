@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { after, beforeEach, describe, test } from 'node:test'
 
+import { mark } from '../src/narrow.ts'
 import { Repo } from './harness.ts'
 
-const SPECS = ['add', 'lazy1', 'lazy2', 'legacy', 'pair', 'sub', 'table']
+const SPECS = ['add', 'chain', 'lazy1', 'lazy2', 'legacy', 'pair', 'sub', 'table', 'text']
 const GLOB = 'test/*.test.js'
 
 /** `file` with the first `from` replaced: a change to one function's body. */
@@ -69,9 +70,31 @@ describe('narrowing inside a changed module', () => {
 		edit(repo, 'src/pair.js', 'return 1', 'return 1 + 0')
 		const some = repo.cli('run', '--', GLOB, '--grep', 'calls one')
 		assert.equal(some.status, 0, some.output)
-		assert.deepEqual(Repo.ran(some), ['pair'])
+		assert.deepEqual(Repo.ran(some), ['pair', 'text'])
 		edit(repo, 'src/pair.js', 'return 2', 'return 2 + 0')
-		assert.deepEqual(run(), ['pair'])
+		assert.deepEqual(run(), ['pair', 'text'])
+	})
+
+	test('a test that reads a module as text reruns on any change to it', () => {
+		first()
+		edit(repo, 'src/pair.js', 'return 2', 'return 2 + 0')
+		assert.deepEqual(run(), ['pair', 'text'])
+	})
+
+	test('a change that reruns nothing keeps what the changed module imports', () => {
+		first()
+		edit(repo, 'src/chain.js', "return 'unused'", "return 'still unused'")
+		assert.deepEqual(run(), [])
+		edit(repo, 'src/leaf.js', "return 'leaf'", "return 'leaf' + ''")
+		assert.deepEqual(run(), ['chain'])
+	})
+
+	test('turned off after a run that narrowed, a change reruns every spec file that loaded the module', () => {
+		first()
+		repo.env.BLACKSMITH_MOCHA_NARROW = '0'
+		edit(repo, 'src/math.js', 'return a - b', 'return a - b + 0')
+		assert.deepEqual(Repo.ran(repo.cli('affected', '--', GLOB)), ['add', 'sub', 'table'])
+		assert.deepEqual(run(), ['add', 'sub', 'table'])
 	})
 
 	test('BLACKSMITH_MOCHA_NARROW=0 and coverage rerun every spec file that loaded the changed module', () => {
@@ -92,5 +115,28 @@ describe('narrowing inside a changed module', () => {
 		assert.equal(result.status, 0, result.output)
 		edit(repo, 'src/math.js', 'return a - b', 'return a - b + 0')
 		assert.deepEqual(Repo.ran(repo.cli('run', '--', GLOB, '--parallel')), ['sub'])
+	})
+})
+
+describe('marks', () => {
+	test('directives stay the first statements', () => {
+		const marked = mark("'use strict'\nexport function f() {\n\treturn 1\n}\n", '/repo/a.js', 'a.js')
+		assert.ok(marked?.startsWith("'use strict';globalThis."), marked ?? 'not marked')
+	})
+
+	test('a `#!` line stays the first', () => {
+		const marked = mark('#!/usr/bin/env node\nexport function f() {\n\treturn 1\n}\n', '/repo/a.js', 'a.js')
+		assert.ok(marked?.startsWith('#!/usr/bin/env node\nglobalThis.'), marked ?? 'not marked')
+	})
+
+	test('TypeScript reaches the global object through a variable a strict check accepts', () => {
+		const marked = mark('export function f(): number {\n\treturn 1\n}\n', '/repo/a.ts', 'a.ts')
+		assert.ok(marked && !marked.includes('globalThis'), marked ?? 'not marked')
+	})
+
+	test('line numbers stay as they were', () => {
+		const code = "'use strict'\nexport function f() {\n\treturn 1\n}\n"
+		const marked = mark(code, '/repo/a.js', 'a.js') ?? ''
+		assert.equal(marked.split('\n')[2], code.split('\n')[2])
 	})
 })
