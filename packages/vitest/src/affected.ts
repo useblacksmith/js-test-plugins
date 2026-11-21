@@ -1778,9 +1778,19 @@ async function adoptSnapshot(
 	// directory; the entry is the one of the shard it is named after.
 	let theirs: string | undefined
 	let snapshot: Snapshot | null = null
+	// Its name without the shard: an anchor of another `--project` set that
+	// shared the cache directory is not this run's.
+	const stem = path
+		.basename(snapshotPath(vitest, dir), '.json')
+		.replace(/\.\d+of\d+$/, '')
 	for (const name of await readdir(dir)) {
 		if (!SNAPSHOT_NAME.test(name)) continue
 		const file = path.join(dir, name)
+		if (name.replace(/(\.\d+of\d+)?\.json$/, '') !== stem) {
+			await rm(unitsFile(file), { force: true })
+			await rm(file)
+			continue
+		}
 		const candidate: Snapshot | null =
 			snapshot === null ? await readSnapshot(file) : null
 		if (candidate !== null && (candidate.shard?.index ?? 1) === index) {
