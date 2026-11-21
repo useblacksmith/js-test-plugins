@@ -181,6 +181,8 @@ function install(): void {
 	const files = new Map<string, FileEntry>()
 	const outputs = new Outputs()
 	const loadStack: string[] = []
+	/** Files read as text or loaded by a child process: a change to one is not narrowed to its functions. */
+	const readWhole = new Set<string>()
 	const running = new AsyncLocalStorage<Target>()
 
 	function addEdge(from: string, to: string): void {
@@ -304,6 +306,15 @@ function install(): void {
 		if (ALWAYS_MANIFESTS.has(absolute) && readByPackage()) return
 		const to = target()
 		charge(to, absolute, content)
+		// Read as text, a file is all of itself to the reader, whichever of its functions ran.
+		if (
+			content &&
+			(to.type === 'test' || to.type === 'hook' || (to.type === 'module' && to.file !== absolute)) &&
+			// Not a loader reading the source of a module it is about to run.
+			!readByPackage()
+		) {
+			readWhole.add(rel(absolute))
+		}
 		// A value read once and kept (a config loaded on first use) is never
 		// read again by the spec files that run later in this process: the
 		// module that did the read is charged too, so every spec importing it
@@ -452,6 +463,8 @@ function install(): void {
 						: !ignored(absolute) && outputs.reads(absolute, true)
 				) {
 					charge(child.to, absolute)
+					// What the child ran of it is not known here.
+					readWhole.add(rel(absolute))
 				}
 			}
 		}
@@ -798,7 +811,7 @@ function install(): void {
 		for (const test of entry?.tests.values() ?? []) roots.push(...test.deps)
 		const ran: Record<string, string[]> = {}
 		for (const module of new Set([...closure(edges, roots), ...(own?.keys() ?? [])])) {
-			if (!marked.has(module)) continue
+			if (!marked.has(module) || readWhole.has(module)) continue
 			ran[module] = [
 				...new Set([...(enteredByAll.get(module) ?? []), ...(own?.get(module) ?? [])]),
 			].sort()
