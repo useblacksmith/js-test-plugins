@@ -79,7 +79,9 @@ A value built from a changed one counts as changed, and a function that mentions
 
 To record function entries the plugin adds one call at the start of each top-level function while Vite transforms the module; source maps account for it. The call names nothing of the module's and does nothing where the plugin is not recording, so a function turned into text with `toString()` still runs wherever that text is evaluated. The record is kept beside the dependency record and travels with it.
 
-What narrowing cannot see: a test whose result depends on a function's source text or `length` rather than on calling it, and a module whose top-level value is there only for the side effects of evaluating it while something else exports or mentions that value.
+What narrowing cannot see: a test whose result depends on a function's source text or `length` rather than on calling it.
+
+A changed top-level value that calls something as it is evaluated (a call, `new`, a tagged template, an assignment, a class's static initializer) reruns every test file that loaded the module, since the call may have done more than make the value. A value of literals, objects, arrays, functions and other names reruns only the test files that loaded a module importing it. A value that is unchanged itself and is built from a changed one counts as the second kind.
 
 ## Caveats
 

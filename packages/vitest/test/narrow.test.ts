@@ -309,6 +309,54 @@ describe('narrow: module digests', () => {
 		expect(difference(before, after)).toMatchObject({ added: ['?./types.ts'] })
 	})
 
+	test('a value that may do more than make it is told apart from one that cannot', () => {
+		const made = (code: string) => digest(`export const a = ${code}`, 'a.tsx').units['a']?.effects
+		for (const code of [
+			'1',
+			"'a' + `b${c}`",
+			'[c, ...d]',
+			'{ c, d: e.f, ...g }',
+			'() => c()',
+			'function () { return new C() }',
+			'class { c = d(); e() { f() } }',
+			'<C d={() => e()} />',
+			'c as unknown as D<E>',
+		]) {
+			expect(made(code), code).toBeUndefined()
+		}
+		for (const code of [
+			'c()',
+			'new C()',
+			'c`d`',
+			'[c()]',
+			'{ c: d() }',
+			'(c = 1)',
+			'c++',
+			'delete c.d',
+			"import('./c.ts')",
+			'class { static c = d() }',
+			'class { static { c() } }',
+			'class extends c() {}',
+			'<C d={e()} />',
+		]) {
+			expect(made(code), code).toBe(true)
+		}
+		expect(digest('export function a() { b() }').units['a']?.effects).toBeUndefined()
+		expect(digest('export enum A { B = 1 }').units['A']?.effects).toBeUndefined()
+	})
+
+	test('a changed value that may do more than make it is a change for every test that loaded the module', () => {
+		const logic = (code: string) => digest(`import { make } from './make.ts'\nexport const a = ${code}\nexport const b = 1`)
+		expect(difference(logic("make('a')"), logic("make('b')"))).toBe('all')
+		expect(difference(logic("'a'"), logic("make('a')"))).toBe('all')
+		expect(difference(logic("make('a')"), logic("'a'"))).toBe('all')
+		expect(difference(logic("['a']"), logic("['b']"))).toMatchObject({ values: new Set(['a']) })
+		// One that is new or gone ran, or no longer runs, for each of them.
+		const more = digest("import { make } from './make.ts'\nexport const a = 'a'\nexport const b = 1\nconst c = make('c')")
+		expect(difference(logic("'a'"), more)).toBe('all')
+		expect(difference(more, logic("'a'"))).toBe('all')
+	})
+
 	describe('an object literal of plain keys', () => {
 		const flags = (body: string, tail = '') => digest(`export const FLAGS = {\n${body}\n} as const\n${tail}`)
 
@@ -332,7 +380,7 @@ describe('narrow: module digests', () => {
 		})
 
 		test('keys in another order are a change to the whole value', () => {
-			const change = difference(flags('A: n++,\nB: n++,'), flags('B: n++,\nA: n++,'))
+			const change = difference(flags('A: a,\nB: b,'), flags('B: b,\nA: a,'))
 			expect(change).toMatchObject({ values: new Set(['FLAGS']), keys: new Map() })
 		})
 
@@ -361,13 +409,22 @@ describe('narrow: module digests', () => {
 				digest("export const FLAGS = {\nA: 'a',\nb() { return this.A }\n} as const"),
 				digest("export const FLAGS = {\nA: 'a',\nb: function () { return this.A }\n} as const"),
 				digest("export const FLAGS = {\nA: 'a',\ntoString: 1\n} as const"),
-				digest("export const FLAGS = Object.freeze({\nA: 'a',\nB: 'b'\n})"),
 				digest("export let FLAGS = {\nA: 'a',\nB: 'b'\n}"),
 			]) {
 				const change = difference(before, after)
 				expect(change).toMatchObject({ values: new Set(['FLAGS']) })
 				expect(change).toHaveProperty('keys', new Map())
 			}
+			expect(difference(before, digest("export const FLAGS = Object.freeze({\nA: 'a',\nB: 'b'\n})"))).toBe('all')
+		})
+
+		test('a key whose value may do more than make it is a change for every test that loaded the module', () => {
+			expect(difference(flags("A: 'a',\nB: make('b'),"), flags("A: 'a',\nB: make('b2'),"))).toBe('all')
+			// A value built from the object runs what it ran before.
+			const names = 'export const NAMES = Object.keys(FLAGS)'
+			expect(difference(flags("A: 'a',", names), flags("A: 'a2',", names))).toMatchObject({
+				values: new Set(['FLAGS', 'NAMES']),
+			})
 		})
 
 		test('a value that can reach the other keys makes the object one value', () => {

@@ -59,4 +59,9 @@ describe('narrow: a change to one key of an object literal', () => {
 		edit("ALPHA: 'alpha' + ''", "ALPHA: 'alpha'")
 		assert.deepEqual(run(), ['alpha', 'any', 'beta', 'idle', 'local', 'names'])
 	})
+
+	test('a changed value that calls something reruns every test file that loaded the module', () => {
+		edit('Object.keys(FLAGS)', 'Object.keys(FLAGS).sort()')
+		assert.deepEqual(run(), ['alpha', 'any', 'beta', 'idle', 'local', 'names', 'plain'])
+	})
 })

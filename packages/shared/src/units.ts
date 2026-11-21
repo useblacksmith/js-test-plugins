@@ -31,6 +31,11 @@ export interface Unit {
 	 * constants of the module, and names it imports, which may hold one.
 	 */
 	reads?: Record<string, string[]>
+	/**
+	 * For a `v`: evaluating it may do more than make the value (it calls
+	 * something, constructs, assigns), which every test that loaded the module saw.
+	 */
+	effects?: true
 }
 
 /** A value import: the module specifier and the names taken from it, `'*'` for all of them. */
@@ -152,6 +157,39 @@ function unwrap(node: Node | null | undefined): Node | null {
 		node = node.expression
 	}
 	return node ?? null
+}
+
+const EFFECTS = new Set([
+	'CallExpression',
+	'NewExpression',
+	'TaggedTemplateExpression',
+	'AwaitExpression',
+	'YieldExpression',
+	'AssignmentExpression',
+	'UpdateExpression',
+	'ImportExpression',
+	'StaticBlock',
+	'Decorator',
+])
+
+/** Whether evaluating `node` may do more than make a value: what a function or an instance runs later is left out. */
+function effects(node: Node | null | undefined): boolean {
+	if (!node || typeof node !== 'object') return false
+	if (Array.isArray(node)) return node.some(effects)
+	if (typeof node.type !== 'string') return false
+	if (EFFECTS.has(node.type)) return true
+	if (node.type === 'UnaryExpression' && node.operator === 'delete') return true
+	if (node.type === 'ArrowFunctionExpression' || node.type === 'FunctionExpression') return false
+	if (node.type === 'FunctionDeclaration') return false
+	if (node.type === 'MethodDefinition') return node.computed ? effects(node.key) : false
+	if (node.type === 'PropertyDefinition' && !node.static) return node.computed ? effects(node.key) : false
+	for (const key in node) {
+		if (key === 'type' || key === 'start' || key === 'end') continue
+		if (key === 'typeAnnotation' || key === 'typeArguments' || key === 'typeParameters') continue
+		const child = node[key]
+		if (child && typeof child === 'object' && effects(child)) return true
+	}
+	return false
 }
 
 function isFunction(node: Node | null): node is Node {
@@ -408,6 +446,7 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 		end: number
 		prefix: string
 		ids: Ids
+		effects?: boolean
 		/** For an object literal of plain keys: where it is, and each key with its value. */
 		object?: { start: number; end: number; keys: Array<{ key: string; start: number; end: number; ids: Ids }> }
 	}
@@ -492,6 +531,7 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 				end: node.end,
 				prefix,
 				ids,
+				effects: effects(node),
 				...(object ? { object } : {}),
 			})
 		}
@@ -736,6 +776,7 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 		}
 		const reads = readsOf(draft.ids, refs)
 		if (reads) next.reads = reads
+		if (draft.effects || previous?.effects) next.effects = true
 		if (draft.object && keyed.has(draft.name)) {
 			const { object } = draft
 			next.frame = hash(`${draft.prefix}${text(draft.start, object.start)}\0${text(object.end, draft.end)}`)
@@ -751,6 +792,7 @@ export function analyze(code: string, file: string, key?: string, loads = false)
 					sig: hash(previous.sig + next.sig),
 					body: hash(previous.body + next.body),
 					refs: [...new Set([...previous.refs, ...refs])].sort(),
+					...(next.effects ? { effects: true as const } : {}),
 				}
 			: next
 	}
