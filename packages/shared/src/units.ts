@@ -237,6 +237,10 @@ function taken(node: Node | null | undefined, held = false): boolean {
 	if (Array.isArray(node)) return node.some((child) => taken(child))
 	if (typeof node.type !== 'string') return false
 	if (node.type === 'Identifier') return node.name === 'Object' && !held
+	// A type of that name is not the value.
+	if ((node.type.startsWith('TS') && !VALUE_TS.has(node.type)) || node.importKind === 'type' || node.exportKind === 'type') {
+		return false
+	}
 	if (node.type === 'MemberExpression') {
 		return taken(node.object, !node.computed) || (node.computed && taken(node.property))
 	}
@@ -252,6 +256,7 @@ function taken(node: Node | null | undefined, held = false): boolean {
 		if (key === 'type' || key === 'start' || key === 'end') continue
 		// The name of a key is not the name of a value.
 		if (key === 'key' && !node.computed) continue
+		if (key === 'typeAnnotation' || key === 'typeArguments' || key === 'typeParameters' || key === 'returnType') continue
 		const child = node[key]
 		if (child && typeof child === 'object' && taken(child)) return true
 	}
