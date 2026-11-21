@@ -47,10 +47,10 @@ describe('narrow: a change to one key of an object literal', () => {
 		assert.deepEqual(run(), [])
 	})
 
-	test('keys in another order rerun only what uses the object whole', () => {
+	test('keys in another order rerun what imports the object', () => {
 		edit("\tBETA: 'beta-2', // the second\n", '')
 		edit('export const FLAGS = {\n', "export const FLAGS = {\n\tBETA: 'beta-2',\n")
-		assert.deepEqual(run(), ['any', 'names'])
+		assert.deepEqual(run(), ['alpha', 'any', 'beta', 'idle', 'local', 'names'])
 	})
 
 	test('an object that is no longer plain keys reruns what imports it', () => {

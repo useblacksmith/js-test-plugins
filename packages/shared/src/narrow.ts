@@ -117,7 +117,7 @@ export function difference(before: ResolvedDigest, after: ResolvedDigest): Chang
 		else if (old.body !== now.body) {
 			const keys = old.kind === 'v' ? changedKeys(old, now) : null
 			// The same keys with the same values in the same order: only the space between them differs.
-			if (keys?.size === 0 && same(Object.keys(old.keys!), Object.keys(now.keys!))) continue
+			if (keys?.size === 0) continue
 			if (keys) partial.set(name, keys)
 			else (old.kind === 'f' ? functions : locals).add(name)
 		}
@@ -175,11 +175,13 @@ export function difference(before: ResolvedDigest, after: ResolvedDigest): Chang
 
 /**
  * The keys that differ between two versions of a `const` holding an object
- * literal; `null` when more than its keys changed. A key that moved changed
- * nothing for what reads it by name.
+ * literal; `null` when more than its keys changed. Values are evaluated in
+ * order, so keys that changed places may each hold another value.
  */
 function changedKeys(old: Unit, now: Unit): Set<string> | null {
 	if (!old.keys || !now.keys || old.frame !== now.frame) return null
+	const kept = (unit: Unit, other: Unit) => Object.keys(unit.keys!).filter((key) => Object.hasOwn(other.keys!, key))
+	if (!same(kept(old, now), kept(now, old))) return null
 	const changed = new Set<string>()
 	for (const key of new Set([...Object.keys(old.keys), ...Object.keys(now.keys)])) {
 		if (own(old.keys, key) !== own(now.keys, key)) changed.add(key)

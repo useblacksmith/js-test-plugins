@@ -331,9 +331,9 @@ describe('narrow: module digests', () => {
 			expect(difference(before, flags("A: 'a', // first\n\n  'B': 'b'"))).toBeNull()
 		})
 
-		test('keys in another order are a change for what uses the object whole', () => {
-			const change = difference(flags("A: 'a',\nB: 'b',"), flags("B: 'b',\nA: 'a',"))
-			expect(change).toMatchObject({ values: new Set(['FLAGS']), keys: new Map([['FLAGS', new Set()]]) })
+		test('keys in another order are a change to the whole value', () => {
+			const change = difference(flags('A: n++,\nB: n++,'), flags('B: n++,\nA: n++,'))
+			expect(change).toMatchObject({ values: new Set(['FLAGS']), keys: new Map() })
 		})
 
 		test('a function of the module reruns for the keys it reads', () => {
