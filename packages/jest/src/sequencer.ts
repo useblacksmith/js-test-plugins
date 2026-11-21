@@ -1,12 +1,15 @@
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 
 import { diffTrees } from '../../shared/src/git.ts'
 import { shardFor } from '../../shared/src/shard.ts'
 import {
 	RECORDS_VERSION,
+	emptyRecords,
 	readManifests,
 	loadRecords,
 	recordedPaths,
+	storeRecords,
 	type StoredRecords,
 	select,
 	type Affects,
@@ -14,6 +17,7 @@ import {
 	type Records,
 } from './core.ts'
 import {
+	DEFAULT_MAX_SHARDS,
 	alwaysPaths,
 	anchorFile,
 	currentTree,
@@ -22,10 +26,11 @@ import {
 	restore,
 	toRelative,
 	type Anchor,
+	type Entry,
 } from './project.ts'
-import { affecting } from './narrow.ts'
+import { affecting, mergeUnits } from './narrow.ts'
 import { recordGlobals } from './record.ts'
-import { log, resolveFromJest, state, type Pending } from './state.ts'
+import { dataDir, log, resolveFromJest, state, type Pending } from './state.ts'
 
 /**
  * The `testSequencer`: Jest hands it every test file it is about to run, and
@@ -72,6 +77,12 @@ export default class BlacksmithSequencer extends Base {
 		options: { shardIndex: number; shardCount: number },
 	): Test[] {
 		const ctx = state()
+		const maxShards = ctx.options.maxShards ?? DEFAULT_MAX_SHARDS
+		if (options.shardCount > maxShards) {
+			throw new Error(
+				`@useblacksmith/jest: --shard=${options.shardIndex}/${options.shardCount} splits the run into more than maxShards (${maxShards}) shards; raise the maxShards option to at least ${options.shardCount}`,
+			)
+		}
 		ctx.shard = { index: options.shardIndex, count: options.shardCount }
 		return tests.filter(
 			(test) =>
@@ -133,7 +144,8 @@ export default class BlacksmithSequencer extends Base {
 async function affected(owned: string[], coverage: boolean): Promise<Pending> {
 	const ctx = state()
 	const shard = ctx.shard
-	await restore(ctx, shard)
+	const entries = await restore(ctx, shard)
+	if (entries) return fromEntries(entries, owned, coverage)
 	const records = loadRecords(readJson<StoredRecords | Records>(recordsFile(ctx, shard)))
 	const anchor = readJson<Anchor>(anchorFile(ctx, shard))
 	const everything = (reason: string): Record<string, Decision> =>
@@ -169,6 +181,88 @@ async function affected(owned: string[], coverage: boolean): Promise<Pending> {
 		}
 	}
 	return { shard, owned, changed, selection, affects }
+}
+
+/**
+ * The decision when the records come from several cache entries. Each test
+ * file is taken from the entry that ran it last, and that entry decides for
+ * it against its own anchor, as a run restoring it alone would. What is left
+ * of them all becomes the stored record: every test file nothing changed
+ * for, this shard's and the others'.
+ */
+async function fromEntries(
+	entries: readonly Entry[],
+	owned: string[],
+	coverage: boolean,
+): Promise<Pending> {
+	const ctx = state()
+	const shard = ctx.shard
+	const from = new Map<string, { time: number; entry: Entry }>()
+	for (const entry of entries) {
+		for (const [spec, record] of Object.entries(entry.records.files)) {
+			const time = record.at ?? 0
+			const known = from.get(spec)
+			if (known === undefined || time > known.time) from.set(spec, { time, entry })
+		}
+	}
+	const merged = emptyRecords()
+	const selection: Record<string, Decision> = Object.fromEntries(
+		owned.map((spec) => [spec, { run: true, reason: 'no record' }]),
+	)
+	const mine = new Set(owned)
+	const always = new Set(alwaysPaths(ctx))
+	const changed = new Set<string>()
+	const sources: Array<{ records: Records; units: string; specs: string[] }> = []
+	if (coverage) log('coverage is on: running every test file')
+	for (const entry of entries) {
+		const { records, anchor } = entry
+		const specs = [...from]
+			.filter(([, taken]) => taken.entry === entry)
+			.map(([spec]) => spec)
+		if (specs.length === 0) continue
+		const differs = diffTrees(
+			anchor.tree,
+			await currentTree(
+				ctx,
+				[...Object.keys(anchor.tree), ...recordedPaths(records)],
+				readManifests(records),
+			),
+		)
+		for (const file of differs) changed.add(file)
+		const trigger = differs.find((file) => always.has(file))
+		if (trigger !== undefined) {
+			for (const spec of specs) {
+				if (mine.has(spec)) selection[spec] = { run: true, reason: `changed: ${trigger}` }
+			}
+			continue
+		}
+		// Projects may map one specifier to different files, and the function record keeps one target.
+		const affects =
+			ctx.narrow && ctx.oneResolver && !coverage
+				? affecting(ctx, shard, records, differs, entry.units)
+				: undefined
+		const verdict = select(records, specs, differs, ctx.options, affects)
+		const kept: string[] = []
+		for (const spec of specs) {
+			const decision = verdict[spec]
+			const record = records.files[spec]
+			if (!decision || !record) continue
+			if (mine.has(spec)) {
+				selection[spec] = coverage ? { run: true, reason: 'coverage' } : decision
+			}
+			if (decision.run && decision.reason.startsWith('changed')) continue
+			merged.files[spec] = record
+			kept.push(spec)
+		}
+		if (kept.length === 0) continue
+		merged.global = [...new Set([...merged.global, ...records.global])].sort()
+		merged.at = Math.max(merged.at, records.at)
+		sources.push({ records, units: entry.units, specs: kept })
+	}
+	mkdirSync(dataDir(ctx.cwd), { recursive: true })
+	writeFileSync(recordsFile(ctx, shard), JSON.stringify(storeRecords(merged)))
+	if (ctx.narrow) mergeUnits(ctx, shard, merged, sources)
+	return { shard, owned, changed: [...changed], selection, settled: true }
 }
 
 function describe(pending: Pending): void {

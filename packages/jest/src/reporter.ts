@@ -130,7 +130,9 @@ export default class BlacksmithReporter {
 		// A changed lockfile or config is in no test file's dependencies, yet
 		// stales every record: a file this run left out keeps none.
 		const always = new Set(alwaysPaths(ctx))
-		const staleAll = pending.changed.some((file) => always.has(file))
+		// A record put together from several cache entries has lost what the change staled already.
+		const changed = pending.settled ? [] : pending.changed
+		const staleAll = changed.some((file) => always.has(file))
 		// The packages in `global` outlive it: with a warm transform cache this
 		// run did not load the transformer's packages, and a later one would.
 		const stored = loadRecords(readJson<StoredRecords | Records>(recordsFile(ctx, pending.shard)))
@@ -143,7 +145,7 @@ export default class BlacksmithReporter {
 					}
 				: stored,
 			run,
-			pending.changed,
+			changed,
 			ctx.options,
 			pending.affects,
 		)

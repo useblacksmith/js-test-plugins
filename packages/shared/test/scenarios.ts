@@ -15,6 +15,8 @@ interface Scenario {
 	name: string
 	/** Only for a plugin that tracks installed packages, or only for one that does not. */
 	packages?: boolean
+	/** Only for a plugin whose shards read the records of every shard. */
+	shards?: true
 	/** Only meaningful when the record travels through a cache. */
 	cacheOnly?: true
 	run(project: Project, cached: boolean): Promise<void>
@@ -314,6 +316,31 @@ export const scenarios: Scenario[] = [
 		packages: false,
 	},
 	...packageScenarios(),
+	{
+		name: 'a run on another shard count reruns nothing, and a change reruns its test files on one shard',
+		shards: true,
+		cacheOnly: true,
+		async run(project) {
+			const shards = async (count: number): Promise<string[]> => {
+				const ran: string[] = []
+				for (let index = 1; index <= count; index++) {
+					project.shard = `${index}/${count}`
+					const run = await project.run()
+					assert.equal(run.status, 0, run.output)
+					ran.push(...run.ran)
+				}
+				project.shard = null
+				return ran.sort()
+			}
+			assert.deepEqual(await shards(2), ALL)
+			assert.deepEqual(await shards(3), [])
+			await expectRun(project, [])
+			project.change('src/b.js', `${project.read('src/b.js')}globalThis.edited = true\n`)
+			assert.deepEqual(await shards(3), ['a', 'b'])
+			assert.deepEqual(await shards(2), [])
+			await expectRun(project, [])
+		},
+	},
 	reruns(
 		'a change to the workflow running the job reruns everything',
 		(project) =>
@@ -326,6 +353,45 @@ export const scenarios: Scenario[] = [
 			project.change('test/d.test.js', testFile(project.driver, 'b', 'b')),
 		['d'],
 	),
+	{
+		name: 'a test file that failed on one shard reruns on another shard count, whatever the other shards hold of it',
+		shards: true,
+		cacheOnly: true,
+		async run(project) {
+			const shards = async (count: number): Promise<string[]> => {
+				const ran: string[] = []
+				for (let index = 1; index <= count; index++) {
+					project.shard = `${index}/${count}`
+					ran.push(...(await project.run()).ran)
+				}
+				project.shard = null
+				return ran.sort()
+			}
+			assert.deepEqual(await shards(2), ALL)
+			// Every shard now saves the three test files.
+			assert.deepEqual(await shards(3), [])
+			project.change('data/c.txt', 'broken\n')
+			assert.deepEqual(await shards(3), ['c'])
+			assert.deepEqual(await shards(2), ['c'])
+			const failed = await project.run()
+			assert.notEqual(failed.status, 0, failed.output)
+			assert.deepEqual(failed.ran, ['c'], failed.output)
+			project.change('data/c.txt', 'ok\nfixed\n')
+			assert.deepEqual(await shards(2), ['c'])
+			assert.deepEqual(await shards(3), [])
+		},
+	},
+	{
+		name: 'a run split into more shards than maxShards fails',
+		shards: true,
+		async run(project) {
+			project.shard = '1/21'
+			const run = await project.run()
+			assert.notEqual(run.status, 0, run.output)
+			assert.match(run.output, /maxShards \(20\)/)
+			assert.deepEqual(run.ran, [], run.output)
+		},
+	},
 	{
 		name: 'an uncommitted change reruns its test files',
 		async run(project) {
@@ -400,6 +466,7 @@ export function cases(driver: Driver): Case[] {
 	return modes.flatMap(({ label, cached }) =>
 		scenarios
 			.filter((scenario) => cached || !scenario.cacheOnly)
+			.filter((scenario) => !scenario.shards || driver.mergesShards === true)
 			.filter(
 				(scenario) =>
 					scenario.packages === undefined ||

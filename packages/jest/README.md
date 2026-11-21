@@ -42,8 +42,9 @@ and `--shard` are supported. Requires Node 22.15 or newer and Jest 29 or newer.
 - **`-t`.** A run with `--testNamePattern` runs part of a test file. After a
   change the file stays selected until a run without the pattern passes.
 - **Shards.** `--shard` assigns test files by a hash of their path, so a new
-  test file moves no other file to another shard. Each shard keeps a record of
-  its own.
+  test file moves no other file to another shard. Each shard saves a record of
+  its own to the Actions cache and looks up the records of all shards, so
+  changing the shard count reruns nothing.
 
 - **Installed packages.** The record names the packages a test file loaded,
   transitive ones included, each with the version in its `package.json`. After
@@ -64,6 +65,7 @@ The second argument of `withBlacksmith`:
 | Option | |
 | --- | --- |
 | `dependencies` | Test file glob → globs of files those test files depend on that nothing reads, e.g. `{ 'test/db/**': 'migrations/**' }`. Paths are relative to the repository root. |
+| `maxShards` | The largest `--shard` count accepted, 20 by default; a run split further fails. Each shard looks up the records of all shards up to this number. |
 
 ## Narrowing
 

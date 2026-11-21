@@ -16,6 +16,7 @@ const driver: Driver = {
 	source: path.join(packageRoot, 'src', 'index.ts'),
 	cacheDir: 'node_modules/.vite',
 	tracksPackages: true,
+	mergesShards: true,
 	withTool: (plugin, tool) => ({
 		'vitest.config.mjs': `import ${JSON.stringify(tool)}\nimport { defineConfig } from 'vitest/config'\nimport blacksmith from ${JSON.stringify(plugin)}\n\nexport default defineConfig({\n\tplugins: [blacksmith()],\n\ttest: { include: ['test/*.test.js'] },\n})\n`,
 	}),
@@ -27,6 +28,10 @@ const driver: Driver = {
 		'run',
 		'--reporter=json',
 		`--outputFile=${report}`,
+		// A shard of the three test files may own none.
+		...(project.shard === null
+			? []
+			: [`--shard=${project.shard}`, '--passWithNoTests']),
 	],
 	files: (report) =>
 		(report as { testResults: { name: string }[] }).testResults.map(
