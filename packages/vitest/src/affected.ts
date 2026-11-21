@@ -994,7 +994,10 @@ export class TreeSnapshotProvider {
 		const changedPaths = await this.changedSince(repo, snapshot, tree)
 		const shardOwns = await shardOwner(this.vitest)
 		const files = only && new Set(Array.from(only, idFile))
-		const owns = files ? (file: string) => files.has(file) : shardOwns
+		// The set names test files as Vitest does, with `/`; a path resolved from the record has `\\` on Windows.
+		const owns = files
+			? (file: string) => files.has(file.split(path.sep).join('/'))
+			: shardOwns
 		const ownsIn = only
 			? (file: string, project: string) => only.has(specId(project, file))
 			: shardOwns
