@@ -263,9 +263,10 @@ function holds(node: Node | null | undefined): boolean {
 	if (!node || typeof node !== 'object') return false
 	if (Array.isArray(node)) return node.some(holds)
 	if (typeof node.type !== 'string') return false
-	if (/Function|^Class/.test(node.type)) return true
+	if (['FunctionExpression', 'ArrowFunctionExpression', 'ClassExpression'].includes(node.type)) return true
 	for (const key in node) {
 		if (key === 'type' || key === 'start' || key === 'end') continue
+		if (key === 'typeAnnotation' || key === 'typeArguments' || key === 'typeParameters') continue
 		const child = node[key]
 		if (child && typeof child === 'object' && holds(child)) return true
 	}

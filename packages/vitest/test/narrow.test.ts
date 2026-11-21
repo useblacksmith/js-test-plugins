@@ -322,6 +322,8 @@ describe('narrow: module digests', () => {
 			'<C d={() => e()} />',
 			'c as unknown as D<E>',
 			'Object.values(c)',
+			'Object.keys(c as Record<string, () => void>)',
+			'new Set<() => void>([c])',
 			'Object.freeze({ c: 1 })',
 			'Object.values(c).filter((d) => d !== e.f)',
 			"Object.keys(c).map((d) => d + 1).join(', ')",
