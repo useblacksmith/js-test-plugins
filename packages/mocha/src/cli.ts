@@ -177,16 +177,19 @@ async function commit(ctx: Context, runFiles: string[]): Promise<void> {
 		entered = new Map()
 		for (const run of runs) {
 			for (const [spec, file] of Object.entries(run.files)) {
+				const partial = file.all?.some((title) => !file.tests[title]) ?? false
 				entered.set(spec, {
-					ran: run.ran?.[spec],
-					partial: file.all?.some((title) => !file.tests[title]) ?? false,
+					// Run in part, a file with a module left out on purpose keeps no
+					// function record: what an earlier run had for that module would stay.
+					ran: partial && run.whole?.includes(spec) ? undefined : run.ran?.[spec],
+					partial,
 				})
 			}
 		}
 	}
 	const { records, anchored } = await ctx.session.commit(
 		pending,
-		runs.map(({ ran: _, ...run }) => run),
+		runs.map(({ ran: _, whole: __, ...run }) => run),
 		entered ? { entered } : {},
 	)
 	rmSync(pendingFile, { force: true })

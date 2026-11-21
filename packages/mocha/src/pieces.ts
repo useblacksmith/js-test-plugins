@@ -13,6 +13,8 @@ export interface Piece {
 	late: Record<string, Record<string, string[]>>
 	/** Per spec file, module → the functions of it the file's tests and hooks entered; only modules whose marks ran. Absent when the process did not mark modules. */
 	ran?: Record<string, Record<string, string[]>>
+	/** Spec files that loaded a module read as text or run by a child process, which has no entry in `ran`. */
+	whole?: string[]
 	/** What a test of an earlier spec file entered after its `Runner` ended. */
 	lateRan?: Record<string, Record<string, string[]>>
 }
@@ -20,6 +22,8 @@ export interface Piece {
 /** A run's record with what each spec file entered, when every process of the run marked modules. */
 export interface MochaRun extends RunRecord {
 	ran?: Record<string, Record<string, string[]>>
+	/** Spec files with a module that is deliberately left out of `ran`. */
+	whole?: string[]
 }
 
 /** Unions the pieces of one run into its record. */
@@ -65,5 +69,12 @@ export function unionPieces(pieces: Piece[]): MochaRun {
 			}
 		}
 	}
-	return { at: Date.now(), graph, global, files, ...(ran ? { ran } : {}) }
+	const whole = pieces.flatMap((piece) => piece.whole ?? [])
+	return {
+		at: Date.now(),
+		graph,
+		global,
+		files,
+		...(ran ? { ran, ...(whole.length > 0 ? { whole } : {}) } : {}),
+	}
 }

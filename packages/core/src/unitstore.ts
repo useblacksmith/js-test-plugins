@@ -218,7 +218,11 @@ export function updateUnits(
 			if (!previous) continue
 			const all: Record<string, string[]> = { ...previous }
 			for (const [module, names] of Object.entries(entered)) {
-				all[module] = [...new Set([...(previous[module] ?? []), ...names])].sort()
+				// A module with no entry before stays without one: it may be one the
+				// other tests use in a way nothing records (read as text), and then
+				// any change to it has to rerun the file.
+				const before = previous[module]
+				if (before) all[module] = [...new Set([...before, ...names])].sort()
 			}
 			units.tests[spec] = all
 		} else units.tests[spec] = entered
