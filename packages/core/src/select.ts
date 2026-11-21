@@ -293,6 +293,8 @@ export function dropStale(
 		if (!decision.run || !entry) continue
 		const roots = [specPath(spec), ...entry.deps]
 		for (const test of Object.values(entry.tests)) roots.push(...(test.deps ?? []))
+		// What every test file, or every one of its project, depends on is loaded by any run.
+		roots.push(...out.global, ...(out.projects[specProject(spec) ?? ''] ?? []))
 		for (const file of closure(out.graph, roots)) reloaded.add(file)
 	}
 	for (const [spec, decision] of Object.entries(verdict)) {
